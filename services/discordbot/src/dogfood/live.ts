@@ -1,6 +1,6 @@
 import { pollFinalDeliveriesOnce } from '../centaur/final-delivery'
 import { CentaurHandoff, type CentaurHandoffResult } from '../centaur/handoff'
-import { loadConfig, type AppConfig } from '../config'
+import { homeChannelIds, loadConfig, type AppConfig } from '../config'
 import { DiscordChannelResolver, DiscordClient } from '../discord/client'
 import { startDiscordGateway, type DiscordGatewayHandle } from '../discord/gateway'
 import { createDiscordMessageProcessor, type DiscordHandoff } from '../discord/process'
@@ -83,6 +83,16 @@ export async function runLiveDogfood(
     const botUser = await discord.fetchCurrentUser()
     if (!config.DISCORD_BOT_USER_ID?.trim() && !config.DISCORD_APPLICATION_ID?.trim() && botUser.id) {
       config.DISCORD_BOT_USER_ID = botUser.id
+    }
+
+    const requestedChannel = await discord.fetchChannel(requestedChannelId)
+    const route = liveRouteStatus(config, requestedChannel)
+    if (!route.ok) {
+      return {
+        ok: false,
+        error: `live_target_not_routable:${requestedChannel.id}`,
+        hint: route.hint
+      }
     }
 
     let resolveObserved: (value: {
@@ -272,6 +282,52 @@ function selectTargetChannelId(config: AppConfig, channelId: string | undefined)
     config.WARRUNNER_HOME_CHANNEL_IDS[0],
     config.WARRUNNER_INTAKE_CHANNEL_IDS[0]
   )
+}
+
+function liveRouteStatus(
+  config: AppConfig,
+  channel: DiscordChannel
+): { ok: true; detail: string } | { ok: false; hint: string } {
+  const homeIds = homeChannelIds(config)
+  const intakeIds = new Set(config.WARRUNNER_INTAKE_CHANNEL_IDS)
+  if (!homeIds.size && !intakeIds.size) {
+    return { ok: true, detail: 'no route filter configured' }
+  }
+
+  const channelId = channel.id.trim()
+  const parentId = channel.parent_id?.trim()
+  if (parentId && homeIds.has(parentId)) {
+    return { ok: true, detail: `parent forum ${parentId} is configured as home` }
+  }
+  if (homeIds.has(channelId)) {
+    return { ok: true, detail: `${channelId} is configured as home` }
+  }
+  if (intakeIds.has(channelId)) {
+    return { ok: true, detail: `${channelId} is configured as intake` }
+  }
+
+  if (parentId) {
+    return {
+      ok: false,
+      hint: [
+        `The target is a thread whose parent ${parentId} is not configured.`,
+        `Set WARRUNNER_HOME_FORUM_CHANNEL_ID=${parentId} or include the thread id in WARRUNNER_HOME_CHANNEL_IDS.`
+      ].join(' ')
+    }
+  }
+  if (channel.type === 15 || channel.type === 16) {
+    return {
+      ok: false,
+      hint: [
+        'The target forum/media channel is not configured.',
+        `Set WARRUNNER_HOME_FORUM_CHANNEL_ID=${channelId} or include it in WARRUNNER_HOME_CHANNEL_IDS.`
+      ].join(' ')
+    }
+  }
+  return {
+    ok: false,
+    hint: `The target channel is not configured. Add ${channelId} to WARRUNNER_HOME_CHANNEL_IDS or WARRUNNER_INTAKE_CHANNEL_IDS.`
+  }
 }
 
 function targetFromSmoke(requestedChannelId: string, result: Extract<SmokePostResult, { ok: true }>): LiveTarget {

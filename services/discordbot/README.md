@@ -94,7 +94,9 @@ pnpm --filter discordbot dogfood:live -- <channel-or-forum-id>
 `dogfood:live` runs the preflight, starts the Gateway consumer, creates a
 dogfood post or thread, waits for you to send a real Discord message there,
 hands that message to `discord_thread_turn`, polls Centaur final deliveries, and
-only passes after a Discord reply is posted. If no channel id is passed, it uses
+only passes after a Discord reply is posted. The target must be configured as a
+Warrunner home forum, home channel, or intake channel; unroutable targets fail
+before any Discord post is created. If no channel id is passed, it uses
 `WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID`, then the configured home forum/home
 channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to change the default
 180-second wait.

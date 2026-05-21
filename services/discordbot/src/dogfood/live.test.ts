@@ -205,6 +205,28 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS live Discord chat loop completed')
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
   })
+
+  it('fails before writing when the target forum is not configured as a Warrunner route', async () => {
+    const result = await runLiveDogfood(
+      testConfig({
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: 'other-forum'
+      }),
+      {
+        channelId: 'forum-1',
+        content: 'should not be posted',
+        timeoutMs: 50,
+        pollIntervalMs: 10
+      }
+    )
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(forumThreads).toHaveLength(0)
+    expect(workflowRuns).toHaveLength(0)
+    expect(discordPosts).toHaveLength(0)
+    expect(formatted).toContain('FAIL live Discord chat loop: live_target_not_routable:forum-1')
+    expect(formatted).toContain('Set WARRUNNER_HOME_FORUM_CHANNEL_ID=forum-1')
+  })
 })
 
 function sendLiveDiscordMessage(): void {
@@ -241,8 +263,8 @@ function sendLiveDiscordMessage(): void {
   )
 }
 
-function testConfig(): AppConfig {
-  return loadConfig({
+function testConfig(env: Record<string, string | undefined> = {}): AppConfig {
+  const base: Record<string, string | undefined> = {
     NODE_ENV: 'test',
     ENVIRONMENT: 'test',
     PORT: '3002',
@@ -257,7 +279,8 @@ function testConfig(): AppConfig {
     DISCORDBOT_API_KEY: 'centaur-key',
     WARRUNNER_HOME_FORUM_CHANNEL_ID: 'forum-1',
     WARRUNNER_HISTORY_LIMIT: '10'
-  } as NodeJS.ProcessEnv)
+  }
+  return loadConfig({ ...base, ...env } as NodeJS.ProcessEnv)
 }
 
 async function capture(request: Request, path: string): Promise<CapturedRequest> {
