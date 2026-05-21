@@ -138,3 +138,5 @@ dedicated to Warrunner and every message there should start a turn.
 
 For a remote deployment, set the same values through Helm using
 `meatspace/infra/helm/values.warrunner.yaml` and the `centaur-infra-env` Secret.
+The `Publish Warrunner Images` workflow publishes the `warrunner-discordbot`
+and `warrunner-overlay` images referenced by that values file.
