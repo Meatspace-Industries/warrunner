@@ -912,11 +912,13 @@ function channelReplies(channelId: string): any[] {
     .reverse()
 }
 
-function sendLiveDiscordMessage(): void {
-  if (!activeGateway || !liveTargetReady) return
-  if (!liveDispatchGatewayMessages) return
+type LiveDiscordSendResult = 'sent' | 'not_ready' | 'disabled' | 'empty'
+
+function sendLiveDiscordMessage(): LiveDiscordSendResult {
+  if (!activeGateway || !liveTargetReady) return 'not_ready'
+  if (!liveDispatchGatewayMessages) return 'disabled'
   const content = liveMessages[liveMessageCursor]
-  if (!content) return
+  if (!content) return 'empty'
   const messageIndex = liveMessageCursor + 1
   liveMessageCursor += 1
   if (liveDispatchThreadCreate) {
@@ -952,12 +954,14 @@ function sendLiveDiscordMessage(): void {
       d: message
     })
   )
+  return 'sent'
 }
 
-function scheduleLiveDiscordMessage(): void {
+function scheduleLiveDiscordMessage(attempts = 500): void {
   const timer = setTimeout(() => {
     liveMessageTimers = liveMessageTimers.filter(item => item !== timer)
-    sendLiveDiscordMessage()
+    const result = sendLiveDiscordMessage()
+    if (result === 'not_ready' && attempts > 0) scheduleLiveDiscordMessage(attempts - 1)
   }, 10)
   liveMessageTimers.push(timer)
 }
