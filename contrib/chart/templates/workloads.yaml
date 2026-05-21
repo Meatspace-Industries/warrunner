@@ -616,6 +616,14 @@ spec:
             - name: DISCORD_GUILD_ID
               value: {{ .Values.discordbot.guildId | quote }}
 {{ end }}
+{{- if and .Values.discordbot.applicationId (not (hasKey $discordbotExtraEnv "DISCORD_APPLICATION_ID")) }}
+            - name: DISCORD_APPLICATION_ID
+              value: {{ .Values.discordbot.applicationId | quote }}
+{{- end }}
+{{- if and .Values.discordbot.botUserId (not (hasKey $discordbotExtraEnv "DISCORD_BOT_USER_ID")) }}
+            - name: DISCORD_BOT_USER_ID
+              value: {{ .Values.discordbot.botUserId | quote }}
+{{- end }}
 {{- if and .Values.discordbot.homeForumChannelId (not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_FORUM_CHANNEL_ID")) }}
             - name: WARRUNNER_HOME_FORUM_CHANNEL_ID
               value: {{ .Values.discordbot.homeForumChannelId | quote }}
@@ -639,6 +647,10 @@ spec:
 {{- if not (hasKey $discordbotExtraEnv "WARRUNNER_REQUIRE_HOME_THREAD") }}
             - name: WARRUNNER_REQUIRE_HOME_THREAD
               value: {{ ternary "true" "false" .Values.discordbot.requireHomeThread | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED") }}
+            - name: WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED
+              value: {{ ternary "true" "false" .Values.discordbot.homeChannelMentionRequired | quote }}
 {{- end }}
 {{- if not (hasKey $discordbotExtraEnv "DISCORD_GATEWAY_ENABLED") }}
             - name: DISCORD_GATEWAY_ENABLED

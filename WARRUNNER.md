@@ -23,6 +23,9 @@ Warrunner is intentionally home-thread based:
   to the Discord forum channel that owns Warrunner work threads.
 - Messages in child threads of that forum become Centaur thread keys in the
   form `discord:<guild_id>:<parent_channel_id>:<thread_id>`.
+- Configure `WARRUNNER_HOME_CHANNEL_IDS` or `discordbot.homeChannelIds` for a
+  normal Discord home channel. By default, only bot-mentioned messages in the
+  home channel start a turn.
 - `WARRUNNER_INTAKE_CHANNEL_IDS` can allow explicit intake channels when needed,
   but the default deployment expects thread context instead of many channel
   listeners.

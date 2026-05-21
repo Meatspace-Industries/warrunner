@@ -77,5 +77,6 @@ export type NormalizedDiscordEvent = {
     channel_id: string
     parent_channel_id?: string
     guild_id: string
+    is_mention?: boolean
   }
 }

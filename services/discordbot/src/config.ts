@@ -27,6 +27,7 @@ const EnvSchema = z.object({
   DISCORD_API_URL: z.string().url().default('https://discord.com/api/v10'),
   DISCORD_BOT_TOKEN: z.string().optional(),
   DISCORD_APPLICATION_ID: z.string().optional(),
+  DISCORD_BOT_USER_ID: z.string().optional(),
   DISCORD_GUILD_ID: z.string().optional(),
   DISCORD_GATEWAY_ENABLED: BoolFromEnv,
   CENTAUR_API_URL: z.string().url().default('http://localhost:8000'),
@@ -39,6 +40,7 @@ const EnvSchema = z.object({
   WARRUNNER_ALLOWED_ROLE_IDS: ListFromEnv,
   WARRUNNER_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(40),
   WARRUNNER_REQUIRE_HOME_THREAD: BoolFromEnv,
+  WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED: BoolFromEnv,
   DISCORD_GATEWAY_RECONNECT_MS: z.coerce.number().int().min(1000).default(5000)
 })
 

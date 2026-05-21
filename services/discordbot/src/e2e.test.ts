@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test'
 import { loadConfig } from './config'
 import { pollFinalDeliveriesOnce } from './centaur/final-delivery'
 import { DiscordClient } from './discord/client'
@@ -26,6 +26,14 @@ const server = Bun.serve({
         guild_id: 'guild-1'
       })
     }
+    if (url.pathname === '/channels/home-1' && request.method === 'GET') {
+      return Response.json({
+        id: 'home-1',
+        type: 0,
+        parent_id: null,
+        guild_id: 'guild-1'
+      })
+    }
     if (url.pathname === '/channels/thread-1/messages' && request.method === 'GET') {
       return Response.json([
         {
@@ -41,6 +49,18 @@ const server = Bun.serve({
           channel_id: 'thread-1',
           guild_id: 'guild-1',
           content: 'older user context',
+          author: { id: 'user-2' },
+          attachments: []
+        }
+      ])
+    }
+    if (url.pathname === '/channels/home-1/messages' && request.method === 'GET') {
+      return Response.json([
+        {
+          id: 'home-hist-1',
+          channel_id: 'home-1',
+          guild_id: 'guild-1',
+          content: 'home channel context',
           author: { id: 'user-2' },
           attachments: []
         }
@@ -85,6 +105,10 @@ const server = Bun.serve({
       discordPosts.push({ path: url.pathname, body: await request.json() })
       return Response.json({ id: 'posted-1', channel_id: 'thread-1' })
     }
+    if (url.pathname === '/channels/home-1/messages' && request.method === 'POST') {
+      discordPosts.push({ path: url.pathname, body: await request.json() })
+      return Response.json({ id: 'posted-home-1', channel_id: 'home-1' })
+    }
     return Response.json({ error: 'not_found', path: url.pathname }, { status: 404 })
   }
 })
@@ -102,7 +126,16 @@ beforeAll(() => {
   env.CENTAUR_API_URL = fakeBaseUrl
   env.DISCORDBOT_API_KEY = 'test-api-key'
   env.WARRUNNER_HOME_FORUM_CHANNEL_ID = 'forum-1'
+  env.WARRUNNER_HOME_CHANNEL_IDS = 'home-1'
   env.WARRUNNER_HISTORY_LIMIT = '10'
+})
+
+beforeEach(() => {
+  workflowRuns.length = 0
+  discordPosts.length = 0
+  delivered.length = 0
+  finalDeliveryReady = false
+  finalDeliveryClaimed = false
 })
 
 afterAll(() => {
@@ -149,6 +182,45 @@ describe('discordbot local e2e', () => {
     })
     expect(workflowRuns[0]?.body.input.parts[0].text).toBe('ship the dogfood path')
     expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(2)
+  })
+
+  it('accepts a bot-mentioned home-channel message and starts a stable home workflow', async () => {
+    const { app } = await import('./index')
+    const response = await app.request('/api/discord/events', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-api-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        id: 'home-msg-1',
+        channel_id: 'home-1',
+        guild_id: 'guild-1',
+        content: '<@bot-user> run this from home',
+        author: { id: 'user-1' },
+        member: { roles: ['eng'] },
+        mentions: [{ id: 'bot-user' }],
+        attachments: []
+      })
+    })
+
+    expect(response.status).toBe(200)
+    await waitFor(() => workflowRuns.length === 1)
+    expect(workflowRuns[0]?.body).toMatchObject({
+      workflow_name: 'discord_thread_turn',
+      input: {
+        thread_key: 'discord:guild-1:home-1:home-1',
+        message_id: 'discord:guild-1:home-1:home-msg-1',
+        delivery: {
+          platform: 'discord',
+          guild_id: 'guild-1',
+          channel_id: 'home-1',
+          thread_id: 'home-1'
+        }
+      }
+    })
+    expect(workflowRuns[0]?.body.input.metadata.is_mention).toBe(true)
+    expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(1)
   })
 
   it('claims a final delivery and posts back into the Discord thread', async () => {

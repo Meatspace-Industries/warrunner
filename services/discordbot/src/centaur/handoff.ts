@@ -33,7 +33,8 @@ export class CentaurHandoff {
           user_id: event.user_id,
           metadata: {
             source: 'discordbot',
-            discord: event.discord
+            discord: event.discord,
+            is_mention: event.discord.is_mention ?? false
           },
           delivery: {
             platform: 'discord',

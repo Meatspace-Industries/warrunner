@@ -16,6 +16,8 @@ discordbot:
     repository: ghcr.io/meatspace-industries/warrunner-discordbot
     tag: latest
     pullPolicy: Always
+  applicationId: ""
+  botUserId: ""
   guildId: ""
   homeForumChannelId: ""
   homeChannelIds: ""
@@ -23,6 +25,7 @@ discordbot:
   allowedRoleIds: ""
   historyLimit: 40
   requireHomeThread: true
+  homeChannelMentionRequired: true
 
 overlay:
   image:

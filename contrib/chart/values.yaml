@@ -147,6 +147,8 @@ discordbot:
     repository: centaur-discordbot
     tag: latest
     pullPolicy: Always
+  applicationId: ""
+  botUserId: ""
   guildId: ""
   homeForumChannelId: ""
   homeChannelIds: ""
@@ -154,6 +156,7 @@ discordbot:
   allowedRoleIds: ""
   historyLimit: 40
   requireHomeThread: true
+  homeChannelMentionRequired: true
   gatewayEnabled: true
   extraEnv: {}
   resources: {}

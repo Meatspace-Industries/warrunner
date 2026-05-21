@@ -145,6 +145,8 @@
             "pullPolicy": { "type": "string" }
           }
         },
+        "applicationId": { "type": "string" },
+        "botUserId": { "type": "string" },
         "guildId": { "type": "string" },
         "homeForumChannelId": { "type": "string" },
         "homeChannelIds": { "type": "string" },
@@ -152,6 +154,7 @@
         "allowedRoleIds": { "type": "string" },
         "historyLimit": { "type": "integer" },
         "requireHomeThread": { "type": "boolean" },
+        "homeChannelMentionRequired": { "type": "boolean" },
         "gatewayEnabled": { "type": "boolean" },
         "extraEnv": { "type": "object" },
         "resources": { "type": "object" }

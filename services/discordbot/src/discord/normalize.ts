@@ -16,7 +16,8 @@ export function normalizeDiscordMessage(opts: {
   if (!message.id || !message.channel_id || !message.guild_id) return null
   if (!message.author?.id || message.author.bot || message.webhook_id) return null
   if (opts.config.DISCORD_GUILD_ID && message.guild_id !== opts.config.DISCORD_GUILD_ID) return null
-  if (!isAllowedRoute(opts.config, message.channel_id, opts.parentChannelId)) return null
+  const isMention = mentionsBot(message, opts.config)
+  if (!isAllowedRoute(opts.config, message.channel_id, opts.parentChannelId, isMention)) return null
   if (!isAllowedMember(opts.config, message.member?.roles ?? [])) return null
 
   const parts = partsFromDiscordMessage(message, opts.config)
@@ -41,7 +42,8 @@ export function normalizeDiscordMessage(opts: {
       message_id: message.id,
       channel_id: message.channel_id,
       ...(parentChannelId ? { parent_channel_id: parentChannelId } : {}),
-      guild_id: message.guild_id
+      guild_id: message.guild_id,
+      is_mention: isMention
     }
   }
 }
@@ -74,14 +76,22 @@ export function normalizeDiscordHistory(
 function isAllowedRoute(
   config: AppConfig,
   channelId: string,
-  parentChannelId: string | undefined
+  parentChannelId: string | undefined,
+  isMention: boolean
 ): boolean {
   const homeIds = homeChannelIds(config)
   const intakeIds = new Set(config.WARRUNNER_INTAKE_CHANNEL_IDS)
   if (!homeIds.size && !intakeIds.size) return true
   if (parentChannelId && homeIds.has(parentChannelId)) return true
+  if (homeIds.has(channelId)) {
+    return (
+      !config.WARRUNNER_REQUIRE_HOME_THREAD ||
+      !config.WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED ||
+      isMention
+    )
+  }
   if (intakeIds.has(channelId)) return true
-  return !config.WARRUNNER_REQUIRE_HOME_THREAD && homeIds.has(channelId)
+  return false
 }
 
 function isAllowedMember(config: AppConfig, memberRoleIds: string[]): boolean {
@@ -101,9 +111,8 @@ function partsFromDiscordMessage(message: DiscordMessage, config: AppConfig): No
 
 export function normalizeDiscordText(input: string, config: AppConfig): string {
   let text = input
-  const applicationId = config.DISCORD_APPLICATION_ID?.trim()
-  if (applicationId) {
-    text = text.replaceAll(`<@${applicationId}>`, '').replaceAll(`<@!${applicationId}>`, '')
+  for (const botId of botMentionIds(config)) {
+    text = text.replaceAll(`<@${botId}>`, '').replaceAll(`<@!${botId}>`, '')
   }
   return text
     .replace(/<#(\d+)>/g, '#$1')
@@ -111,6 +120,21 @@ export function normalizeDiscordText(input: string, config: AppConfig): string {
     .replace(/<@&(\d+)>/g, '@role:$1')
     .replace(/<a?:([A-Za-z0-9_]+):\d+>/g, ':$1:')
     .trim()
+}
+
+function mentionsBot(message: DiscordMessage, config: AppConfig): boolean {
+  const ids = botMentionIds(config)
+  if (!ids.length) return false
+  const content = message.content ?? ''
+  if (ids.some(id => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`))) return true
+  return (message.mentions ?? []).some(user => ids.includes(user.id))
+}
+
+function botMentionIds(config: AppConfig): string[] {
+  const ids = [config.DISCORD_BOT_USER_ID, config.DISCORD_APPLICATION_ID]
+    .map(value => value?.trim())
+    .filter((value): value is string => Boolean(value))
+  return [...new Set(ids)]
 }
 
 function attachmentText(message: DiscordMessage): string {

@@ -5,7 +5,8 @@ Discordbot is Warrunner's Discord/forum-thread integration for Centaur.
 It runs two loops:
 
 - Discord Gateway `MESSAGE_CREATE` ingest. Messages in configured home forum
-  threads become `discord_thread_turn` workflow runs.
+  threads become `discord_thread_turn` workflow runs. Messages in configured
+  home channels are also accepted when they mention the bot by default.
 - Centaur final-delivery polling. Completed `platform: discord` deliveries are
   posted back into the same Discord thread.
 
@@ -41,14 +42,21 @@ DISCORD_BOT_TOKEN=... \
 DISCORDBOT_API_KEY=... \
 CENTAUR_API_URL=http://localhost:8000 \
 DISCORD_GUILD_ID=... \
+DISCORD_BOT_USER_ID=... \
 WARRUNNER_HOME_FORUM_CHANNEL_ID=... \
+WARRUNNER_HOME_CHANNEL_IDS=... \
 pnpm --filter discordbot dev
 ```
 
 5. In Discord, create a forum post under the configured home forum channel.
 6. Send a message in that forum thread. Mentioning the bot is optional if the
    thread belongs to the configured home forum.
-7. Verify that the final answer appears in the same Discord thread.
+7. Alternatively, mention the bot in a configured home channel.
+8. Verify that the final answer appears in the same Discord thread or home
+   channel.
+
+Set `WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED=false` only if the home channel is
+dedicated to Warrunner and every message there should start a turn.
 
 For a remote deployment, set the same values through Helm using
 `meatspace/infra/helm/values.warrunner.yaml` and the `centaur-infra-env` Secret.
