@@ -1,5 +1,5 @@
 import { discordBotToken, type AppConfig } from '../config'
-import type { DiscordChannel, DiscordMessage, DiscordUser } from './types'
+import type { DiscordChannel, DiscordCreateMessageBody, DiscordMessage, DiscordUser } from './types'
 
 export class DiscordApiError extends Error {
   readonly status: number
@@ -51,10 +51,7 @@ export class DiscordClient {
     return Array.isArray(messages) ? messages.reverse() : []
   }
 
-  async createMessage(
-    channelId: string,
-    body: { content: string; allowed_mentions?: { parse: string[] } }
-  ): Promise<DiscordMessage> {
+  async createMessage(channelId: string, body: DiscordCreateMessageBody): Promise<DiscordMessage> {
     return await this.request<DiscordMessage>(`/channels/${encodeURIComponent(channelId)}/messages`, {
       method: 'POST',
       body: JSON.stringify(body)

@@ -190,6 +190,12 @@ describe('dogfood emulated chat loop', () => {
     expect(result.ok).toBe(true)
     expect(result.workflowRun?.body.workflow_name).toBe('discord_thread_turn')
     expect(result.discordPost?.body.content).toBe('gateway-to-discord final answer')
+    expect(result.discordPost?.body.message_reference).toMatchObject({
+      message_id: 'msg-1',
+      channel_id: 'thread-1',
+      guild_id: 'guild-1',
+      fail_if_not_exists: false
+    })
     expect(formatted).toContain('PASS emulated Discord Gateway MESSAGE_CREATE received')
     expect(formatted).toContain('PASS Discord reply posted')
   })

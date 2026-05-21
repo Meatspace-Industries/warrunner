@@ -8,7 +8,8 @@ It runs two loops:
   threads become `discord_thread_turn` workflow runs. Messages in configured
   home channels are also accepted when they mention the bot by default.
 - Centaur final-delivery polling. Completed `platform: discord` deliveries are
-  posted back into the same Discord thread.
+  posted back into the same Discord thread or home channel, and reply to the
+  accepted Discord message when the delivery metadata includes it.
 
 ## Local Emulated E2E
 
@@ -46,7 +47,7 @@ verifies:
 - A Gateway message can complete the emulated chat loop through workflow handoff,
   final-delivery claim, and Discord reply posting.
 - Discordbot claims a final delivery and posts the final answer back to the
-  Discord thread API.
+  Discord thread API as a reply to the accepted Discord message.
 
 ## Live Dogfood Checklist
 

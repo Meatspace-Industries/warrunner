@@ -73,7 +73,8 @@ const server = Bun.serve({
               platform: 'discord',
               guild_id: 'guild-1',
               channel_id: 'thread-1',
-              thread_id: 'thread-1'
+              thread_id: 'thread-1',
+              message_id: 'msg-1'
             },
             final_payload: {
               result_text: 'gateway-to-discord final answer'
@@ -175,7 +176,8 @@ describe('Discord Gateway chat loop', () => {
               platform: 'discord',
               guild_id: 'guild-1',
               channel_id: 'thread-1',
-              thread_id: 'thread-1'
+              thread_id: 'thread-1',
+              message_id: 'msg-1'
             }
           }
         }
@@ -191,7 +193,13 @@ describe('Discord Gateway chat loop', () => {
         authorization: 'Bot discord-token',
         body: {
           content: 'gateway-to-discord final answer',
-          allowed_mentions: { parse: [] }
+          allowed_mentions: { parse: [] },
+          message_reference: {
+            message_id: 'msg-1',
+            channel_id: 'thread-1',
+            guild_id: 'guild-1',
+            fail_if_not_exists: false
+          }
         }
       })
       expect(delivered).toHaveLength(1)

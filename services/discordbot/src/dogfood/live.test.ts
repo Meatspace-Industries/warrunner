@@ -318,7 +318,10 @@ describe('live dogfood chat loop', () => {
         workflow_name: 'discord_thread_turn',
         input: {
           thread_key: 'discord:guild-1:forum-1:live-thread-1',
-          message_id: 'discord:guild-1:live-thread-1:live-msg-1'
+          message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+          delivery: {
+            message_id: 'live-msg-1'
+          }
         }
       }
     })
@@ -329,7 +332,13 @@ describe('live dogfood chat loop', () => {
       authorization: 'Bot discord-token',
       body: {
         content: 'live dogfood final answer',
-        allowed_mentions: { parse: [] }
+        allowed_mentions: { parse: [] },
+        message_reference: {
+          message_id: 'live-msg-1',
+          channel_id: 'live-thread-1',
+          guild_id: 'guild-1',
+          fail_if_not_exists: false
+        }
       }
     })
     expect(delivered).toHaveLength(1)
@@ -377,7 +386,8 @@ describe('live dogfood chat loop', () => {
             platform: 'discord',
             guild_id: 'guild-1',
             channel_id: 'home-1',
-            thread_id: 'home-1'
+            thread_id: 'home-1',
+            message_id: 'live-msg-1'
           }
         }
       }
@@ -398,7 +408,13 @@ describe('live dogfood chat loop', () => {
       authorization: 'Bot discord-token',
       body: {
         content: 'live dogfood final answer',
-        allowed_mentions: { parse: [] }
+        allowed_mentions: { parse: [] },
+        message_reference: {
+          message_id: 'live-msg-1',
+          channel_id: 'home-1',
+          guild_id: 'guild-1',
+          fail_if_not_exists: false
+        }
       }
     })
     expect(delivered).toHaveLength(1)
@@ -429,6 +445,10 @@ describe('live dogfood chat loop', () => {
     expect(discordPosts.map(post => post.body.content)).toEqual([
       'live dogfood final answer',
       'live dogfood final answer 2'
+    ])
+    expect(discordPosts.map(post => post.body.message_reference?.message_id)).toEqual([
+      'live-msg-1',
+      'live-msg-2'
     ])
     expect(delivered).toHaveLength(2)
     expect(formatted).toContain('PASS live Discord dogfood session completed')
@@ -722,6 +742,11 @@ describe('live dogfood chat loop', () => {
       expect(discordPosts[0]?.body.content).toStartWith('chunk')
       expect(discordPosts[1]?.body.content).toStartWith('chunk')
       expect(discordPosts[2]?.body.content).toBe('second reply after chunked delivery')
+      expect(discordPosts.map(post => post.body.message_reference?.message_id)).toEqual([
+        'live-msg-1',
+        undefined,
+        'live-msg-2'
+      ])
       expect(delivered).toHaveLength(2)
       expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1')
       expect(formatted).toContain(

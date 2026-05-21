@@ -1,6 +1,6 @@
 import { centaurApiKey, type AppConfig } from '../config'
 import { DiscordApiError, DiscordClient } from '../discord/client'
-import type { DiscordMessage } from '../discord/types'
+import type { DiscordCreateMessageBody, DiscordMessage, DiscordMessageReference } from '../discord/types'
 import { logError } from '../logging'
 
 const CONSUMER_ID = `discordbot-${process.pid}`
@@ -100,27 +100,70 @@ async function deliver(client: DiscordClient, delivery: any): Promise<DiscordMes
   const target = targetFromDelivery(delivery)
   if (!target.channelId) throw new Error('missing_discord_delivery_target')
   const text = extractText(delivery.final_payload ?? {})
+  const chunks = splitFinalDeliveryText(text)
   const messages: DiscordMessage[] = []
-  for (const chunk of splitFinalDeliveryText(text)) {
-    messages.push(await client.createMessage(target.channelId, {
+  for (const [index, chunk] of chunks.entries()) {
+    const body: DiscordCreateMessageBody = {
       content: chunk,
       allowed_mentions: { parse: [] }
-    }))
+    }
+    const reference = index === 0 ? messageReferenceFromTarget(target) : undefined
+    if (reference) body.message_reference = reference
+    messages.push(await client.createMessage(target.channelId, body))
   }
   return messages
 }
 
-function targetFromDelivery(delivery: any): { channelId?: string } {
+function targetFromDelivery(delivery: any): {
+  channelId?: string
+  guildId?: string
+  messageId?: string
+} {
   const meta = delivery.delivery ?? {}
+  const guildId = cleanString(meta.guild_id ?? delivery.guild_id)
+  const messageId = discordMessageId(
+    meta.message_id ?? meta.discord_message_id ?? delivery.message_id ?? delivery.discord_message_id
+  )
   const channelId = String(meta.thread_id ?? meta.channel_id ?? meta.channel ?? '').trim()
-  if (channelId) return { channelId }
+  if (channelId) return { channelId, guildId, messageId }
 
   const threadKey = String(delivery.thread_key ?? '')
   const parts = threadKey.split(':')
   if (parts[0] === 'discord' && parts.length >= 4) {
-    return { channelId: parts.slice(3).join(':') }
+    return {
+      channelId: parts.slice(3).join(':'),
+      guildId: guildId || parts[1],
+      messageId
+    }
   }
-  return {}
+  return { guildId, messageId }
+}
+
+function messageReferenceFromTarget(target: {
+  channelId?: string
+  guildId?: string
+  messageId?: string
+}): DiscordMessageReference | undefined {
+  if (!target.messageId) return undefined
+  return {
+    message_id: target.messageId,
+    ...(target.channelId ? { channel_id: target.channelId } : {}),
+    ...(target.guildId ? { guild_id: target.guildId } : {}),
+    fail_if_not_exists: false
+  }
+}
+
+function discordMessageId(value: unknown): string | undefined {
+  const text = cleanString(value)
+  if (!text) return undefined
+  const parts = text.split(':')
+  if (parts[0] === 'discord' && parts.length >= 4) return parts.at(-1)?.trim() || undefined
+  return text
+}
+
+function cleanString(value: unknown): string | undefined {
+  const text = value === undefined || value === null ? '' : String(value).trim()
+  return text || undefined
 }
 
 function extractText(payload: any): string {

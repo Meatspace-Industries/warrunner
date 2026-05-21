@@ -81,7 +81,8 @@ export async function runEmulatedChatLoop(): Promise<EmulatedChatLoopResult> {
                 platform: 'discord',
                 guild_id: 'guild-1',
                 channel_id: 'thread-1',
-                thread_id: 'thread-1'
+                thread_id: 'thread-1',
+                message_id: 'msg-1'
               },
               final_payload: {
                 result_text: 'gateway-to-discord final answer'

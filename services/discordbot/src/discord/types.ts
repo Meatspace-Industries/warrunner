@@ -34,6 +34,19 @@ export type DiscordMessage = {
   type?: number
 }
 
+export type DiscordMessageReference = {
+  message_id: string
+  channel_id?: string
+  guild_id?: string
+  fail_if_not_exists?: boolean
+}
+
+export type DiscordCreateMessageBody = {
+  content: string
+  allowed_mentions?: { parse: string[] }
+  message_reference?: DiscordMessageReference
+}
+
 export type DiscordChannel = {
   id: string
   type: number
