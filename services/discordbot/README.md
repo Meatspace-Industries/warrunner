@@ -158,7 +158,10 @@ write a JSON transcript containing the target URL, accepted Discord message ids,
 workflow execution ids, handoff statuses, and every Discord reply id/content,
 including chunked final answers. Live dogfood uses the execution id when
 available so unrelated same-channel final deliveries do not satisfy the wrong
-turn. The Meatspace host wrapper defaults this to
+turn. If a long-running Discordbot process claims and posts the final delivery
+first, the live dogfood waiter also polls the target channel and counts a
+bot-authored Discord reply posted after the accepted user message. The
+Meatspace host wrapper defaults this to
 `/var/lib/meepo/warrunner/dogfood-transcripts`. If a
 transcript directory is configured, live/session dogfood exits nonzero when the
 transcript cannot be written. Both the host wrapper and the direct dogfood CLI

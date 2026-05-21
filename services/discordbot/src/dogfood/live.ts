@@ -232,6 +232,8 @@ export async function runLiveDogfoodSession(
         config,
         discord,
         channelId: accepted.event.channel_id,
+        botUserId: botUser.id,
+        afterMessageId: accepted.event.discord.message_id,
         executionId: accepted.executionId,
         fromIndex: replyCursor,
         timeoutMs: remainingTimeout(timeoutMs, startedAt),
@@ -427,6 +429,8 @@ async function waitForReply(opts: {
   config: AppConfig
   discord: ObservingDiscordClient
   channelId: string
+  botUserId?: string
+  afterMessageId: string
   executionId?: string
   fromIndex: number
   timeoutMs: number
@@ -462,9 +466,45 @@ async function waitForReply(opts: {
         return { reply: { ...reply, messages }, index: lastIndex }
       }
     }
+
+    const observed = await observeBotReplyFromDiscord(opts)
+    if (observed) return { reply: observed, index: opts.discord.observedReplies.length - 1 }
     await sleep(opts.pollIntervalMs)
   }
   throw new Error(`timed out waiting for a Discord final-delivery reply in ${opts.channelId}`)
+}
+
+async function observeBotReplyFromDiscord(opts: {
+  discord: ObservingDiscordClient
+  channelId: string
+  botUserId?: string
+  afterMessageId: string
+}): Promise<ObservedReply | undefined> {
+  const botUserId = opts.botUserId?.trim()
+  if (!botUserId) return undefined
+
+  const messages = await opts.discord
+    .fetchMessages({
+      channelId: opts.channelId,
+      after: opts.afterMessageId,
+      limit: 25
+    })
+    .catch(() => [])
+  const locallyDeliveredIds = new Set(opts.discord.observedReplies.map(reply => reply.message.id))
+  const replies = messages
+    .filter(message => message.channel_id === opts.channelId)
+    .filter(message => message.author?.id === botUserId)
+    .filter(message => !locallyDeliveredIds.has(message.id))
+    .filter(message => String(message.content ?? '').trim())
+    .map(message => ({
+      channelId: opts.channelId,
+      content: String(message.content ?? ''),
+      message
+    }))
+
+  const first = replies[0]
+  if (!first) return undefined
+  return { ...first, messages: replies }
 }
 
 function handoffExecutionId(result: CentaurHandoffResult): string | undefined {

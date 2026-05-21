@@ -37,11 +37,13 @@ export class DiscordClient {
 
   async fetchMessages(opts: {
     channelId: string
+    after?: string
     before?: string
     limit?: number
   }): Promise<DiscordMessage[]> {
     const params = new URLSearchParams()
     params.set('limit', String(Math.max(1, Math.min(opts.limit ?? 40, 100))))
+    if (opts.after) params.set('after', opts.after)
     if (opts.before) params.set('before', opts.before)
     const messages = await this.request<DiscordMessage[]>(
       `/channels/${encodeURIComponent(opts.channelId)}/messages?${params}`

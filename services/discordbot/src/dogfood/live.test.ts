@@ -25,6 +25,8 @@ const workflowRuns: CapturedRequest[] = []
 const discordPosts: CapturedRequest[] = []
 const delivered: CapturedRequest[] = []
 const pendingDeliveries: any[] = []
+const createdDiscordMessages: any[] = []
+const externalDiscordReplies: any[] = []
 
 let activeGateway: any = null
 let liveTargetReady = false
@@ -35,6 +37,8 @@ let liveMessageCursor = 0
 let liveMessages: string[] = []
 let deliveryTexts: string[] = []
 let injectStaleDeliveryBeforeNext = false
+let dropExpectedDeliveryAfterStale = false
+let externalDeliveryClaimedByService = false
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 
 const server = Bun.serve({
@@ -100,6 +104,9 @@ const server = Bun.serve({
       })
     }
     if (url.pathname === '/channels/live-thread-1/messages' && request.method === 'GET') {
+      if (url.searchParams.has('after')) {
+        return Response.json(channelReplies('live-thread-1'))
+      }
       return Response.json([
         {
           id: 'hist-1',
@@ -112,11 +119,24 @@ const server = Bun.serve({
       ])
     }
     if (url.pathname === '/channels/live-thread-1/messages' && request.method === 'POST') {
-      discordPosts.push(await capture(request, url.pathname))
+      const captured = await capture(request, url.pathname)
+      discordPosts.push(captured)
+      const message = {
+        id: `reply-msg-${discordPosts.length}`,
+        channel_id: 'live-thread-1',
+        guild_id: 'guild-1',
+        content: captured.body.content,
+        author: { id: 'bot-user', bot: true },
+        attachments: []
+      }
+      createdDiscordMessages.push(message)
       scheduleLiveDiscordMessage()
-      return Response.json({ id: `reply-msg-${discordPosts.length}`, channel_id: 'live-thread-1' })
+      return Response.json(message)
     }
     if (url.pathname === '/channels/home-1/messages' && request.method === 'GET') {
+      if (url.searchParams.has('after')) {
+        return Response.json(channelReplies('home-1'))
+      }
       return Response.json([
         {
           id: 'home-hist-1',
@@ -131,17 +151,38 @@ const server = Bun.serve({
     if (url.pathname === '/channels/home-1/messages' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
       discordPosts.push(captured)
+      const message = {
+        id: `home-msg-${discordPosts.length}`,
+        channel_id: 'home-1',
+        guild_id: 'guild-1',
+        content: captured.body.content,
+        author: { id: 'bot-user', bot: true },
+        attachments: []
+      }
+      createdDiscordMessages.push(message)
       liveTargetReady = true
       liveConversationChannelId = 'home-1'
       liveParentChannelId = undefined
       liveDispatchThreadCreate = false
       scheduleLiveDiscordMessage()
-      return Response.json({ id: `home-msg-${discordPosts.length}`, channel_id: 'home-1' })
+      return Response.json(message)
     }
     if (url.pathname === '/workflows/runs' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
       workflowRuns.push(captured)
       const runIndex = workflowRuns.length
+      const finalText = deliveryTexts[runIndex - 1] ?? `live dogfood final answer ${runIndex}`
+      if (externalDeliveryClaimedByService) {
+        externalDiscordReplies.push({
+          id: `external-reply-${runIndex}`,
+          channel_id: captured.body.input.delivery.thread_id ?? captured.body.input.delivery.channel_id,
+          guild_id: captured.body.input.delivery.guild_id,
+          content: finalText,
+          author: { id: 'bot-user', bot: true },
+          attachments: []
+        })
+        return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
+      }
       if (injectStaleDeliveryBeforeNext) {
         injectStaleDeliveryBeforeNext = false
         pendingDeliveries.push({
@@ -152,13 +193,16 @@ const server = Bun.serve({
             result_text: 'stale same-channel final answer'
           }
         })
+        if (dropExpectedDeliveryAfterStale) {
+          return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
+        }
       }
       pendingDeliveries.push({
         execution_id: `exec-${runIndex}`,
         thread_key: captured.body.input.thread_key,
         delivery: captured.body.input.delivery,
         final_payload: {
-          result_text: deliveryTexts[runIndex - 1] ?? `live dogfood final answer ${runIndex}`
+          result_text: finalText
         }
       })
       return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
@@ -203,6 +247,8 @@ beforeEach(() => {
   discordPosts.length = 0
   delivered.length = 0
   pendingDeliveries.length = 0
+  createdDiscordMessages.length = 0
+  externalDiscordReplies.length = 0
   activeGateway = null
   liveTargetReady = false
   liveConversationChannelId = 'live-thread-1'
@@ -212,6 +258,8 @@ beforeEach(() => {
   liveMessages = ['live dogfood from Discord']
   deliveryTexts = ['live dogfood final answer']
   injectStaleDeliveryBeforeNext = false
+  dropExpectedDeliveryAfterStale = false
+  externalDeliveryClaimedByService = false
 })
 
 afterAll(() => {
@@ -465,6 +513,59 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-2')
   })
 
+  it('counts a bot reply posted by another running Discordbot instance', async () => {
+    liveMessages = ['externally delivered session turn']
+    deliveryTexts = ['externally posted final answer']
+    externalDeliveryClaimedByService = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'live-thread-1',
+      setupMode: 'attach',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+      onProgress: line => {
+        if (line.includes('PASS live target ready')) {
+          liveTargetReady = true
+          liveConversationChannelId = 'live-thread-1'
+          liveParentChannelId = 'forum-1'
+          scheduleLiveDiscordMessage()
+        }
+      }
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected live dogfood to pass')
+    expect(workflowRuns).toHaveLength(1)
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('externally delivered session turn')
+    expect(discordPosts).toHaveLength(0)
+    expect(delivered).toHaveLength(0)
+    expect(result.reply.message.id).toBe('external-reply-1')
+    expect(result.reply.content).toBe('externally posted final answer')
+    expect(formatted).toContain('PASS Discord reply posted: external-reply-1')
+  })
+
+  it('does not count a locally posted stale execution as an external bot reply', async () => {
+    liveMessages = ['stale-only session turn']
+    injectStaleDeliveryBeforeNext = true
+    dropExpectedDeliveryAfterStale = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open stale-only dogfood',
+      timeoutMs: 150,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(workflowRuns).toHaveLength(1)
+    expect(discordPosts.map(post => post.body.content)).toEqual(['stale same-channel final answer'])
+    expect(delivered.map(item => item.path)).toEqual([
+      '/agent/final-deliveries/stale-exec-1/delivered'
+    ])
+    expect(formatted).toContain('timed out waiting for a Discord final-delivery reply')
+    expect(formatted).not.toContain('PASS Discord reply posted')
+  })
+
   it('writes a live session transcript without auth secrets', async () => {
     liveMessages = ['first transcript turn', 'second transcript turn']
     const transcriptDir = await mkdtemp(join(tmpdir(), 'warrunner-dogfood-'))
@@ -601,6 +702,13 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('Set WARRUNNER_HOME_FORUM_CHANNEL_ID=forum-1')
   })
 })
+
+function channelReplies(channelId: string): any[] {
+  return [...createdDiscordMessages, ...externalDiscordReplies]
+    .filter(message => message.channel_id === channelId)
+    .slice()
+    .reverse()
+}
 
 function sendLiveDiscordMessage(): void {
   if (!activeGateway || !liveTargetReady) return
