@@ -1,5 +1,6 @@
 {{- $reposPath := .Values.sandbox.reposPath -}}
 {{- $apiExtraEnv := .Values.api.extraEnv | default dict -}}
+{{- $discordbotExtraEnv := .Values.discordbot.extraEnv | default dict -}}
 {{- if and .Values.repoCache.enabled (not $reposPath) -}}
 {{- $reposPath = .Values.repoCache.hostPath -}}
 {{- end -}}
@@ -540,6 +541,123 @@ spec:
 {{ toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
 {{ toYaml .Values.slackbot.resources | nindent 12 }}
+      volumes:
+        - name: firewall-ca
+          secret:
+            secretName: {{ include "centaur.trustedCaSecretName" . }}
+{{- end }}
+{{ if .Values.discordbot.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "discordbot") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "discordbot") | nindent 4 }}
+spec:
+  replicas: {{ .Values.discordbot.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "discordbot") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret-env: {{ toJson (dict "secretManager" .Values.secretManager "firewallCa" .Values.firewall.ca) | sha256sum }}
+        checksum/firewall-ca: {{ toJson .Values.firewall.ca | sha256sum }}
+        checksum/infra-secrets: {{ include "centaur.infraSecretsChecksum" . }}
+      labels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "discordbot") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: discordbot
+          image: {{ printf "%s:%s" .Values.discordbot.image.repository .Values.discordbot.image.tag | quote }}
+          imagePullPolicy: {{ .Values.discordbot.image.pullPolicy }}
+          env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sDISCORD_BOT_TOKEN" .Values.secretManager.envPrefix }}
+            - name: DISCORDBOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sDISCORDBOT_API_KEY" .Values.secretManager.envPrefix }}
+            - name: CENTAUR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sDISCORDBOT_API_KEY" .Values.secretManager.envPrefix }}
+            - name: CENTAUR_API_URL
+              value: {{ printf "http://%s:8000" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
+            - name: HTTPS_PROXY
+              value: {{ include "centaur.firewallProxyUrl" . | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /firewall-certs/ca-cert.pem
+            - name: NO_PROXY
+              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+            - name: no_proxy
+              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+{{- if and .Values.discordbot.guildId (not (hasKey $discordbotExtraEnv "DISCORD_GUILD_ID")) }}
+            - name: DISCORD_GUILD_ID
+              value: {{ .Values.discordbot.guildId | quote }}
+{{ end }}
+{{- if and .Values.discordbot.homeForumChannelId (not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_FORUM_CHANNEL_ID")) }}
+            - name: WARRUNNER_HOME_FORUM_CHANNEL_ID
+              value: {{ .Values.discordbot.homeForumChannelId | quote }}
+{{- end }}
+{{- if and .Values.discordbot.homeChannelIds (not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_CHANNEL_IDS")) }}
+            - name: WARRUNNER_HOME_CHANNEL_IDS
+              value: {{ .Values.discordbot.homeChannelIds | quote }}
+{{- end }}
+{{- if and .Values.discordbot.intakeChannelIds (not (hasKey $discordbotExtraEnv "WARRUNNER_INTAKE_CHANNEL_IDS")) }}
+            - name: WARRUNNER_INTAKE_CHANNEL_IDS
+              value: {{ .Values.discordbot.intakeChannelIds | quote }}
+{{- end }}
+{{- if and .Values.discordbot.allowedRoleIds (not (hasKey $discordbotExtraEnv "WARRUNNER_ALLOWED_ROLE_IDS")) }}
+            - name: WARRUNNER_ALLOWED_ROLE_IDS
+              value: {{ .Values.discordbot.allowedRoleIds | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_HISTORY_LIMIT") }}
+            - name: WARRUNNER_HISTORY_LIMIT
+              value: {{ .Values.discordbot.historyLimit | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_REQUIRE_HOME_THREAD") }}
+            - name: WARRUNNER_REQUIRE_HOME_THREAD
+              value: {{ ternary "true" "false" .Values.discordbot.requireHomeThread | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "DISCORD_GATEWAY_ENABLED") }}
+            - name: DISCORD_GATEWAY_ENABLED
+              value: {{ ternary "true" "false" .Values.discordbot.gatewayEnabled | quote }}
+{{- end }}
+{{- range $name, $value := .Values.discordbot.extraEnv }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+{{- end }}
+          ports:
+            - containerPort: 3002
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+          volumeMounts:
+            - name: firewall-ca
+              mountPath: /firewall-certs
+              readOnly: true
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+{{ toYaml .Values.discordbot.resources | nindent 12 }}
       volumes:
         - name: firewall-ca
           secret:

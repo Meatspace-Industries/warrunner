@@ -140,6 +140,24 @@ slackbot:
   extraEnv: {}
   resources: {}
 
+discordbot:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: centaur-discordbot
+    tag: latest
+    pullPolicy: Always
+  guildId: ""
+  homeForumChannelId: ""
+  homeChannelIds: ""
+  intakeChannelIds: ""
+  allowedRoleIds: ""
+  historyLimit: 40
+  requireHomeThread: true
+  gatewayEnabled: true
+  extraEnv: {}
+  resources: {}
+
 postgres:
   enabled: true
   image:

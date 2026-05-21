@@ -132,6 +132,31 @@
         "enabled": { "type": "boolean" }
       }
     },
+    "discordbot": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string" }
+          }
+        },
+        "guildId": { "type": "string" },
+        "homeForumChannelId": { "type": "string" },
+        "homeChannelIds": { "type": "string" },
+        "intakeChannelIds": { "type": "string" },
+        "allowedRoleIds": { "type": "string" },
+        "historyLimit": { "type": "integer" },
+        "requireHomeThread": { "type": "boolean" },
+        "gatewayEnabled": { "type": "boolean" },
+        "extraEnv": { "type": "object" },
+        "resources": { "type": "object" }
+      }
+    },
     "runnerAccess": {
       "type": "object",
       "properties": {

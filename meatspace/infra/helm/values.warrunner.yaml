@@ -1,0 +1,40 @@
+# Warrunner's default deployment shape: Discord forum threads are the primary
+# integration surface and Slack is disabled unless explicitly re-enabled.
+
+api:
+  workflowWorkerEnabled: true
+  slackEtlEnabled: false
+  extraEnv:
+    CENTAUR_DEPLOYMENT_NAME: warrunner
+
+slackbot:
+  enabled: false
+
+discordbot:
+  enabled: true
+  image:
+    repository: ghcr.io/meatspace-industries/warrunner-discordbot
+    tag: latest
+    pullPolicy: Always
+  guildId: ""
+  homeForumChannelId: ""
+  homeChannelIds: ""
+  intakeChannelIds: ""
+  allowedRoleIds: ""
+  historyLimit: 40
+  requireHomeThread: true
+
+overlay:
+  image:
+    repository: ghcr.io/meatspace-industries/warrunner-overlay
+    tag: latest
+    pullPolicy: Always
+    sourcePath: /overlay
+
+sandbox:
+  extraEnv:
+    WARRUNNER_RUNTIME_STATE_DIR: /var/lib/meepo
+
+repoCache:
+  enabled: true
+  hostPath: /var/lib/meepo/repos
