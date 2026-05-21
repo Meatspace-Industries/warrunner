@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { loadConfig, type AppConfig } from './config'
-import { formatPreflight, runPreflight } from './dogfood'
+import { dogfoodCommandExitCode, formatPreflight, runPreflight } from './dogfood'
 import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
 import { formatSmokePost, runSmokePost } from './dogfood/smoke'
 
@@ -117,6 +117,15 @@ describe('dogfood preflight', () => {
     expect(failed).toContain('DISCORD_GUILD_ID')
     expect(failed).toContain('home route')
     expect(formatPreflight(result)).toContain('FAIL warrunner dogfood preflight failed')
+  })
+})
+
+describe('dogfood command exit code', () => {
+  it('requires requested transcript persistence for successful live dogfood commands', () => {
+    expect(dogfoodCommandExitCode(true, true)).toBe(0)
+    expect(dogfoodCommandExitCode(true, false)).toBe(1)
+    expect(dogfoodCommandExitCode(false, true)).toBe(1)
+    expect(dogfoodCommandExitCode(false, false)).toBe(1)
   })
 })
 

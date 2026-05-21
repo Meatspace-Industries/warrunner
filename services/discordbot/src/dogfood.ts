@@ -77,6 +77,10 @@ export function formatPreflight(result: PreflightResult): string {
   return lines.join('\n')
 }
 
+export function dogfoodCommandExitCode(resultOk: boolean, transcriptOk: boolean): 0 | 1 {
+  return resultOk && transcriptOk ? 0 : 1
+}
+
 if (import.meta.main) {
   const command = process.argv[2] ?? 'preflight'
   const globalArgs = parseDogfoodGlobalArgs(process.argv.slice(3))
@@ -123,8 +127,12 @@ if (import.meta.main) {
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfood(result))
-    await reportDogfoodTranscript('live', result, globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR)
-    process.exit(result.ok ? 0 : 1)
+    const transcriptOk = await reportDogfoodTranscript(
+      'live',
+      result,
+      globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
+    )
+    process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }
   if (command === 'session') {
     const config = loadConfig(env)
@@ -145,17 +153,17 @@ if (import.meta.main) {
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfoodSession(result))
-    await reportDogfoodTranscript(
+    const transcriptOk = await reportDogfoodTranscript(
       'session',
       result,
       globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
     )
-    process.exit(result.ok ? 0 : 1)
+    process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--open] <channel-id> [message]'
+      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--open] <channel-id> [message]'
     )
     process.exit(2)
   }
@@ -203,13 +211,15 @@ async function reportDogfoodTranscript(
   command: 'live' | 'session',
   result: LiveDogfoodResult | LiveDogfoodSessionResult,
   transcriptDir: string | undefined
-): Promise<void> {
+): Promise<boolean> {
   const transcript = await writeDogfoodTranscript({ command, result, transcriptDir })
-  if ('skipped' in transcript) return
+  if ('skipped' in transcript) return true
   if (transcript.ok) {
     console.log(`PASS dogfood transcript: ${transcript.path}`)
+    return true
   } else {
-    console.error(`WARN dogfood transcript failed: ${transcript.error}`)
+    console.error(`FAIL dogfood transcript: ${transcript.error}`)
+    return false
   }
 }
 
