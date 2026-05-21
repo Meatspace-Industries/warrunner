@@ -24,6 +24,7 @@ type LiveTarget = {
   requestedChannelId: string
   channel: DiscordChannel
   conversationChannelId: string
+  discordUrl?: string
   createdThread?: DiscordChannel
   setupMessage?: DiscordMessage
 }
@@ -189,7 +190,7 @@ export async function runLiveDogfoodSession(
         hint: setup.hint
       }
     }
-    target = targetFromSmoke(requestedChannelId, setup)
+    target = targetFromSmoke(config, requestedChannelId, setup)
     opts.onProgress?.(formatLiveTarget(target, botUser.id, timeoutMs))
 
     discord.armReplyObserver()
@@ -249,6 +250,7 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
   return [
     'PASS live Discord chat loop completed',
     `PASS target: ${target}`,
+    ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS workflow handoff: ${result.handoff.status}`,
     `PASS normalized user text: ${result.observedEvent.parts[0]?.text ?? '(missing)'}`,
     `PASS Discord reply posted: ${result.reply.message.id}`,
@@ -268,6 +270,7 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
   return [
     'PASS live Discord dogfood session completed',
     `PASS target: ${target}`,
+    ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS turns completed: ${result.turns.length}`,
     ...result.turns.map((turn, index) => {
       const text = turn.observedEvent.parts[0]?.text ?? '(missing)'
@@ -462,11 +465,18 @@ function liveRouteStatus(
   }
 }
 
-function targetFromSmoke(requestedChannelId: string, result: Extract<SmokePostResult, { ok: true }>): LiveTarget {
+function targetFromSmoke(
+  config: AppConfig,
+  requestedChannelId: string,
+  result: Extract<SmokePostResult, { ok: true }>
+): LiveTarget {
+  const conversationChannelId = result.createdThread?.id ?? result.channel.id
+  const discordUrl = discordChannelUrl(config, result, conversationChannelId)
   return {
     requestedChannelId,
     channel: result.channel,
-    conversationChannelId: result.createdThread?.id ?? result.channel.id,
+    conversationChannelId,
+    ...(discordUrl ? { discordUrl } : {}),
     ...(result.createdThread ? { createdThread: result.createdThread } : {}),
     ...(result.message ? { setupMessage: result.message } : {})
   }
@@ -486,13 +496,28 @@ function formatLiveTarget(target: LiveTarget, botUserId: string | undefined, tim
   const mention = botUserId ? `<@${botUserId}>` : '@Warrunner'
   const seconds = Math.round(timeoutMs / 1_000)
   if (target.createdThread) {
-    return `PASS live target ready: ${channelLabel(target.channel)} -> ${target.createdThread.name ?? target.createdThread.id} (${target.conversationChannelId}); reply in that thread within ${seconds}s.`
+    return [
+      `PASS live target ready: ${channelLabel(target.channel)} -> ${target.createdThread.name ?? target.createdThread.id} (${target.conversationChannelId}); reply in that thread within ${seconds}s.`,
+      ...(target.discordUrl ? [`PASS Discord URL: ${target.discordUrl}`] : [])
+    ].join('\n')
   }
-  return `PASS live target ready: ${channelLabel(target.channel)} (${target.conversationChannelId}); send a Discord message mentioning ${mention} within ${seconds}s.`
+  return [
+    `PASS live target ready: ${channelLabel(target.channel)} (${target.conversationChannelId}); send a Discord message mentioning ${mention} within ${seconds}s.`,
+    ...(target.discordUrl ? [`PASS Discord URL: ${target.discordUrl}`] : [])
+  ].join('\n')
 }
 
 function channelLabel(channel: DiscordChannel): string {
   return channel.name ? `#${channel.name}` : channel.id
+}
+
+function discordChannelUrl(
+  config: AppConfig,
+  result: Extract<SmokePostResult, { ok: true }>,
+  channelId: string
+): string | undefined {
+  const guildId = result.createdThread?.guild_id ?? result.channel.guild_id ?? config.DISCORD_GUILD_ID
+  return guildId ? `https://discord.com/channels/${guildId}/${channelId}` : undefined
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

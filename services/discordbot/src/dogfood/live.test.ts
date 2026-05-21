@@ -204,8 +204,12 @@ describe('live dogfood chat loop', () => {
     })
     expect(delivered).toHaveLength(1)
     expect(progress.some(line => line.includes('PASS live target ready'))).toBe(true)
+    expect(
+      progress.some(line => line.includes('https://discord.com/channels/guild-1/live-thread-1'))
+    ).toBe(true)
     expect(progress.some(line => line.includes('PASS live Discord message accepted'))).toBe(true)
     expect(formatted).toContain('PASS live Discord chat loop completed')
+    expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
   })
 
@@ -230,6 +234,7 @@ describe('live dogfood chat loop', () => {
     ])
     expect(delivered).toHaveLength(2)
     expect(formatted).toContain('PASS live Discord dogfood session completed')
+    expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS turns completed: 2')
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
   })
