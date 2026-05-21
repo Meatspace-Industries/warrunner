@@ -80,6 +80,7 @@ function toTranscript(
     command,
     ok: result.ok,
     completed_at: completedAt.toISOString(),
+    ...('stopReason' in result ? { stop_reason: result.stopReason } : {}),
     ...(result.target ? { target: targetSummary(result.target) } : {}),
     turns: turns.map((turn, index) => ({
       index: index + 1,

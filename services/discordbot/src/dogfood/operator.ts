@@ -9,6 +9,7 @@ type SpawnLike = (
 export type DogfoodCliArgs = {
   openDiscord: boolean
   attachOnly: boolean
+  untilTimeout: boolean
   turnLimit?: number
   timeoutMs?: number
   pollIntervalMs?: number
@@ -37,6 +38,7 @@ export function parseDogfoodCliArgs(
 ): DogfoodCliArgs {
   let openDiscord = truthy(env.WARRUNNER_DOGFOOD_OPEN_DISCORD)
   let attachOnly = false
+  let untilTimeout = false
   let turnLimit: number | undefined
   let timeoutMs: number | undefined
   let pollIntervalMs: number | undefined
@@ -60,39 +62,51 @@ export function parseDogfoodCliArgs(
       attachOnly = false
       continue
     }
+    if (arg === '--until-timeout' || arg === '--until-idle' || arg === '--no-turn-limit') {
+      untilTimeout = true
+      turnLimit = undefined
+      continue
+    }
     if (arg === '--turns' || arg === '--session-turns') {
       const value = args[index + 1]?.trim()
       const parsed = parsePositiveIntegerFlag(arg, value)
-      if ('error' in parsed) return { openDiscord, attachOnly, positional, error: parsed.error }
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
       turnLimit = parsed.value
+      untilTimeout = false
       index += 1
       continue
     }
     if (arg.startsWith('--turns=') || arg.startsWith('--session-turns=')) {
       const [flag, value = ''] = splitFlagValue(arg)
       const parsed = parsePositiveIntegerFlag(flag, value)
-      if ('error' in parsed) return { openDiscord, attachOnly, positional, error: parsed.error }
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
       turnLimit = parsed.value
+      untilTimeout = false
       continue
     }
     if (arg === '--timeout-ms') {
       const value = args[index + 1]?.trim()
       const parsed = parsePositiveIntegerFlag(arg, value)
-      if ('error' in parsed) return { openDiscord, attachOnly, positional, error: parsed.error }
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
       timeoutMs = parsed.value
       index += 1
       continue
     }
     if (arg.startsWith('--timeout-ms=')) {
       const parsed = parsePositiveIntegerFlag('--timeout-ms', arg.slice('--timeout-ms='.length))
-      if ('error' in parsed) return { openDiscord, attachOnly, positional, error: parsed.error }
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
       timeoutMs = parsed.value
       continue
     }
     if (arg === '--poll-interval-ms') {
       const value = args[index + 1]?.trim()
       const parsed = parsePositiveIntegerFlag(arg, value)
-      if ('error' in parsed) return { openDiscord, attachOnly, positional, error: parsed.error }
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
       pollIntervalMs = parsed.value
       index += 1
       continue
@@ -102,7 +116,8 @@ export function parseDogfoodCliArgs(
         '--poll-interval-ms',
         arg.slice('--poll-interval-ms='.length)
       )
-      if ('error' in parsed) return { openDiscord, attachOnly, positional, error: parsed.error }
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
       pollIntervalMs = parsed.value
       continue
     }
@@ -111,6 +126,7 @@ export function parseDogfoodCliArgs(
   return {
     openDiscord,
     attachOnly,
+    untilTimeout,
     ...(turnLimit ? { turnLimit } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(pollIntervalMs ? { pollIntervalMs } : {}),

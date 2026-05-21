@@ -434,7 +434,39 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS live Discord dogfood session completed')
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS turns completed: 2')
+    expect(formatted).toContain('PASS stop reason: turn_limit')
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2 [exec-2] via final_delivery')
+  })
+
+  it('keeps an open-ended live session running until the timeout expires', async () => {
+    liveMessages = ['open-ended session turn']
+    const progress: string[] = []
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'live-thread-1',
+      setupMode: 'attach',
+      untilTimeout: true,
+      timeoutMs: 80,
+      pollIntervalMs: 10,
+      onProgress: line => {
+        progress.push(line)
+        if (line.includes('PASS live target ready')) {
+          liveTargetReady = true
+          liveConversationChannelId = 'live-thread-1'
+          liveParentChannelId = 'forum-1'
+          scheduleLiveDiscordMessage()
+        }
+      }
+    })
+    const formatted = formatLiveDogfoodSession(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected open-ended session to pass')
+    expect(result.turns).toHaveLength(1)
+    expect(result.stopReason).toBe('idle_timeout')
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('open-ended session turn')
+    expect(progress).toContain('PASS live Discord session idle timeout after 1 turns')
+    expect(formatted).toContain('PASS turns completed: 1')
+    expect(formatted).toContain('PASS stop reason: idle_timeout')
   })
 
   it('attaches to an existing forum thread without posting a setup prompt', async () => {
@@ -628,6 +660,7 @@ describe('live dogfood chat loop', () => {
         schema_version: 1,
         command: 'session',
         ok: true,
+        stop_reason: 'turn_limit',
         target: {
           requested_channel_id: 'forum-1',
           conversation_channel_id: 'live-thread-1',

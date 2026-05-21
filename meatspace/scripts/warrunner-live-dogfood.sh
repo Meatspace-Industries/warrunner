@@ -32,6 +32,7 @@ Examples:
   meatspace/scripts/warrunner-live-dogfood.sh session
   meatspace/scripts/warrunner-live-dogfood.sh session -- 123456789012345678
   meatspace/scripts/warrunner-live-dogfood.sh session -- --turns 12 --timeout-ms 600000 123456789012345678
+  meatspace/scripts/warrunner-live-dogfood.sh session -- --until-timeout --timeout-ms 3600000 123456789012345678
   meatspace/scripts/warrunner-live-dogfood.sh session -- --attach --turns 12 123456789012345678
 USAGE
 }

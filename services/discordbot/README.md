@@ -181,10 +181,14 @@ pnpm --filter discordbot dogfood:session -- <channel-or-forum-id>
 This uses the same setup as `dogfood:live`, but waits for multiple Discord
 messages and prints each accepted message plus the Discord reply id. It defaults
 to three turns; pass `--turns <n>` or set `WARRUNNER_DOGFOOD_SESSION_TURNS` to
-change that count. Pass `--timeout-ms <ms>` to extend a long manual session
-without editing env. Use the printed Discord URL as the window to keep chatting
-with Warrunner. For the tightest local loop, run
+change that count. Pass `--until-timeout` to keep accepting turns until the
+configured timeout expires after at least one completed turn. Pass
+`--timeout-ms <ms>` to extend a long manual session without editing env. Use the
+printed Discord URL as the window to keep chatting with Warrunner. For the
+tightest local loop, run
 `pnpm --filter discordbot dogfood:session -- --open --turns 12 --timeout-ms 600000 <channel-or-forum-id>`.
+For open-ended Discord-window iteration, run
+`pnpm --filter discordbot dogfood:session -- --open --until-timeout --timeout-ms 3600000 <channel-or-forum-id>`.
 To reattach to an already-open forum thread or home channel without posting a
 new setup prompt, pass `--attach`:
 

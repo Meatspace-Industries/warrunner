@@ -19,6 +19,7 @@ type LiveDogfoodOptions = {
 
 type LiveDogfoodSessionOptions = LiveDogfoodOptions & {
   turnLimit?: number
+  untilTimeout?: boolean
 }
 
 type LiveSetupMode = 'prompt' | 'attach'
@@ -80,6 +81,7 @@ export type LiveDogfoodSessionResult =
       ok: true
       target: LiveTarget
       turns: LiveDogfoodTurn[]
+      stopReason: 'turn_limit' | 'idle_timeout'
     }
   | {
       ok: false
@@ -163,6 +165,7 @@ export async function runLiveDogfoodSession(
   const setupMode = opts.setupMode ?? 'prompt'
   const turns: LiveDogfoodTurn[] = []
   let acceptedTurn: AcceptedLiveDogfoodTurn | undefined
+  const untilTimeout = opts.untilTimeout === true
 
   try {
     const botUser = await discord.fetchCurrentUser()
@@ -234,12 +237,18 @@ export async function runLiveDogfoodSession(
     discord.armReplyObserver()
     const turnLimit = sessionTurnLimit(opts.turnLimit)
     let replyCursor = 0
-    while (turns.length < turnLimit) {
-      const accepted = await tracker.next(
-        turns.length,
-        remainingTimeout(timeoutMs, startedAt),
-        `timed out waiting for Discord message ${turns.length + 1} in ${target.conversationChannelId}`
-      )
+    while (untilTimeout || turns.length < turnLimit) {
+      const nextMessageTimeout = `timed out waiting for Discord message ${turns.length + 1} in ${target.conversationChannelId}`
+      let accepted: Awaited<ReturnType<LiveTurnTracker['next']>>
+      try {
+        accepted = await tracker.next(turns.length, remainingTimeout(timeoutMs, startedAt), nextMessageTimeout)
+      } catch (error) {
+        if (untilTimeout && turns.length > 0 && errorMessage(error) === nextMessageTimeout) {
+          opts.onProgress?.(`PASS live Discord session idle timeout after ${turns.length} turns`)
+          return { ok: true, target, turns, stopReason: 'idle_timeout' }
+        }
+        throw error
+      }
       acceptedTurn = {
         observedEvent: accepted.event,
         handoff: accepted.handoff,
@@ -269,7 +278,7 @@ export async function runLiveDogfoodSession(
       acceptedTurn = undefined
     }
 
-    return { ok: true, target, turns }
+    return { ok: true, target, turns, stopReason: 'turn_limit' }
   } catch (error) {
     return {
       ok: false,
@@ -333,6 +342,7 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
     `PASS target: ${target}`,
     ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS turns completed: ${result.turns.length}`,
+    `PASS stop reason: ${result.stopReason}`,
     ...result.turns.map((turn, index) => {
       const text = turn.observedEvent.parts[0]?.text ?? '(missing)'
       const messageCount =
@@ -727,6 +737,10 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function sleep(ms: number): Promise<void> {
