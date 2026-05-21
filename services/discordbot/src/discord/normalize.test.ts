@@ -129,6 +129,24 @@ describe('normalizeDiscordMessage', () => {
     ).toBeNull()
   })
 
+  it('rejects all Discord messages when no route config exists', () => {
+    const config = loadConfig(
+      env({
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: '',
+        WARRUNNER_HOME_CHANNEL_IDS: '',
+        WARRUNNER_INTAKE_CHANNEL_IDS: ''
+      })
+    )
+
+    expect(
+      normalizeDiscordMessage({
+        message: message(),
+        config,
+        parentChannelId: 'forum-1'
+      })
+    ).toBeNull()
+  })
+
   it('enforces allowed role ids when configured', () => {
     const config = loadConfig(env({ WARRUNNER_ALLOWED_ROLE_IDS: 'ops' }))
     expect(

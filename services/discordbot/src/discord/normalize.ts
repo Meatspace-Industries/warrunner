@@ -81,7 +81,7 @@ function isAllowedRoute(
 ): boolean {
   const homeIds = homeChannelIds(config)
   const intakeIds = new Set(config.WARRUNNER_INTAKE_CHANNEL_IDS)
-  if (!homeIds.size && !intakeIds.size) return true
+  if (!homeIds.size && !intakeIds.size) return false
   if (parentChannelId && homeIds.has(parentChannelId)) return true
   if (homeIds.has(channelId)) {
     return (

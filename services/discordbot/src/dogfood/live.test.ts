@@ -903,6 +903,31 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('FAIL live Discord chat loop: live_target_not_routable:forum-1')
     expect(formatted).toContain('Set WARRUNNER_HOME_FORUM_CHANNEL_ID=forum-1')
   })
+
+  it('fails closed when no Warrunner route is configured', async () => {
+    const result = await runLiveDogfood(
+      testConfig({
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: '',
+        WARRUNNER_HOME_CHANNEL_ID: '',
+        WARRUNNER_HOME_CHANNEL_IDS: '',
+        WARRUNNER_INTAKE_CHANNEL_IDS: ''
+      }),
+      {
+        channelId: 'forum-1',
+        content: 'should not be posted without a route',
+        timeoutMs: 50,
+        pollIntervalMs: 10
+      }
+    )
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(forumThreads).toHaveLength(0)
+    expect(workflowRuns).toHaveLength(0)
+    expect(discordPosts).toHaveLength(0)
+    expect(formatted).toContain('FAIL live Discord chat loop: live_target_not_routable:forum-1')
+    expect(formatted).toContain('No Warrunner Discord route is configured')
+  })
 })
 
 function channelReplies(channelId: string): any[] {

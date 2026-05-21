@@ -735,7 +735,11 @@ function liveRouteStatus(
   const homeIds = homeChannelIds(config)
   const intakeIds = new Set(config.WARRUNNER_INTAKE_CHANNEL_IDS)
   if (!homeIds.size && !intakeIds.size) {
-    return { ok: true, detail: 'no route filter configured' }
+    return {
+      ok: false,
+      hint:
+        'No Warrunner Discord route is configured. Set WARRUNNER_HOME_FORUM_CHANNEL_ID, WARRUNNER_HOME_CHANNEL_IDS, or WARRUNNER_INTAKE_CHANNEL_IDS before live dogfood.'
+    }
   }
 
   const channelId = channel.id.trim()
