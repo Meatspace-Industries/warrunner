@@ -101,6 +101,16 @@ before any Discord post is created. If no channel id is passed, it uses
 channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to change the default
 180-second wait.
 
+For iterative dogfooding from the Discord window, run a short live session:
+
+```bash
+pnpm --filter discordbot dogfood:session -- <channel-or-forum-id>
+```
+
+This uses the same setup as `dogfood:live`, but waits for multiple Discord
+messages and prints each accepted message plus the Discord reply id. It defaults
+to three turns; set `WARRUNNER_DOGFOOD_SESSION_TURNS` to change that count.
+
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
 lookup.

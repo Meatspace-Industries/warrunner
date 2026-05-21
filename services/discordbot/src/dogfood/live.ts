@@ -16,6 +16,10 @@ type LiveDogfoodOptions = {
   onProgress?: (line: string) => void
 }
 
+type LiveDogfoodSessionOptions = LiveDogfoodOptions & {
+  turnLimit?: number
+}
+
 type LiveTarget = {
   requestedChannelId: string
   channel: DiscordChannel
@@ -28,6 +32,12 @@ type ObservedReply = {
   channelId: string
   content: string
   message: DiscordMessage
+}
+
+type LiveDogfoodTurn = {
+  observedEvent: NormalizedDiscordEvent
+  handoff: CentaurHandoffResult
+  reply: ObservedReply
 }
 
 export type LiveDogfoodResult =
@@ -46,6 +56,21 @@ export type LiveDogfoodResult =
       hint?: string
     }
 
+export type LiveDogfoodSessionResult =
+  | {
+      ok: true
+      target: LiveTarget
+      turns: LiveDogfoodTurn[]
+    }
+  | {
+      ok: false
+      target?: LiveTarget
+      turns: LiveDogfoodTurn[]
+      observedEvent?: NormalizedDiscordEvent
+      error: string
+      hint?: string
+    }
+
 const DEFAULT_TIMEOUT_MS = 180_000
 const DEFAULT_POLL_INTERVAL_MS = 2_000
 
@@ -53,9 +78,42 @@ export async function runLiveDogfood(
   config: AppConfig = loadConfig(),
   opts: LiveDogfoodOptions = {}
 ): Promise<LiveDogfoodResult> {
+  const result = await runLiveDogfoodSession(config, { ...opts, turnLimit: 1 })
+  if (!result.ok) {
+    return {
+      ok: false,
+      ...(result.target ? { target: result.target } : {}),
+      ...(result.observedEvent ? { observedEvent: result.observedEvent } : {}),
+      error: result.error,
+      hint: result.hint
+    }
+  }
+  const turn = result.turns[0]
+  if (!turn) {
+    return {
+      ok: false,
+      target: result.target,
+      error: 'live_chat_loop_missing_turn',
+      hint: 'No completed live Discord turn was captured.'
+    }
+  }
+  return {
+    ok: true,
+    target: result.target,
+    observedEvent: turn.observedEvent,
+    handoff: turn.handoff,
+    reply: turn.reply
+  }
+}
+
+export async function runLiveDogfoodSession(
+  config: AppConfig = loadConfig(),
+  opts: LiveDogfoodSessionOptions = {}
+): Promise<LiveDogfoodSessionResult> {
   if (!config.DISCORD_GATEWAY_ENABLED) {
     return {
       ok: false,
+      turns: [],
       error: 'discord_gateway_disabled',
       hint: 'Set DISCORD_GATEWAY_ENABLED=true for live Discord-window dogfooding.'
     }
@@ -65,6 +123,7 @@ export async function runLiveDogfood(
   if (!requestedChannelId) {
     return {
       ok: false,
+      turns: [],
       error: 'missing_live_channel_id',
       hint:
         'Pass a channel id, set WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID, or configure a Warrunner home forum/home channel.'
@@ -76,8 +135,8 @@ export async function runLiveDogfood(
   const discord = new ObservingDiscordClient(config)
   let gatewayHandle: DiscordGatewayHandle | null = null
   let target: LiveTarget | undefined
-  let observed: { event: NormalizedDiscordEvent; handoff: CentaurHandoffResult } | null = null
   const startedAt = Date.now()
+  const turns: LiveDogfoodTurn[] = []
 
   try {
     const botUser = await discord.fetchCurrentUser()
@@ -90,35 +149,27 @@ export async function runLiveDogfood(
     if (!route.ok) {
       return {
         ok: false,
+        turns,
         error: `live_target_not_routable:${requestedChannel.id}`,
         hint: route.hint
       }
     }
 
-    let resolveObserved: (value: {
-      event: NormalizedDiscordEvent
-      handoff: CentaurHandoffResult
-    }) => void = () => {}
-    const observedPromise = new Promise<{
-      event: NormalizedDiscordEvent
-      handoff: CentaurHandoffResult
-    }>(resolve => {
-      resolveObserved = resolve
-    })
     const targetId = () => target?.conversationChannelId ?? requestedChannelId
+    const tracker = new LiveTurnTracker()
     const channels = new DiscordChannelResolver(discord)
     const handoff = new ObservingHandoff(
       config,
       event => event.channel_id === targetId() || event.parent_channel_id === requestedChannelId,
       value => {
-        observed = value
-        resolveObserved(value)
+        tracker.accept(value)
       }
     )
     gatewayHandle = startLiveGateway(config, discord, channels, handoff)
     if (!gatewayHandle) {
       return {
         ok: false,
+        turns,
         error: 'discord_gateway_not_started',
         hint: 'Verify DISCORD_BOT_TOKEN is set and DISCORD_GATEWAY_ENABLED=true.'
       }
@@ -133,6 +184,7 @@ export async function runLiveDogfood(
       gatewayHandle?.stop()
       return {
         ok: false,
+        turns,
         error: setup.error,
         hint: setup.hint
       }
@@ -141,29 +193,41 @@ export async function runLiveDogfood(
     opts.onProgress?.(formatLiveTarget(target, botUser.id, timeoutMs))
 
     discord.armReplyObserver()
-    const accepted = await withTimeout(
-      observedPromise,
-      timeoutMs,
-      `timed out waiting for a Discord message in ${target.conversationChannelId}`
-    )
-    observed = accepted
-    opts.onProgress?.(`PASS live Discord message accepted: ${accepted.event.message_id}`)
+    const turnLimit = sessionTurnLimit(opts.turnLimit)
+    let replyCursor = 0
+    while (turns.length < turnLimit) {
+      const accepted = await tracker.next(
+        turns.length,
+        remainingTimeout(timeoutMs, startedAt),
+        `timed out waiting for Discord message ${turns.length + 1} in ${target.conversationChannelId}`
+      )
+      opts.onProgress?.(`PASS live Discord message accepted: ${accepted.event.message_id}`)
 
-    const reply = await waitForReply({
-      config,
-      discord,
-      channelId: accepted.event.channel_id,
-      timeoutMs: remainingTimeout(timeoutMs, startedAt),
-      pollIntervalMs
-    })
-    opts.onProgress?.(`PASS live Discord reply observed: ${reply.message.id}`)
+      const observedReply = await waitForReply({
+        config,
+        discord,
+        channelId: accepted.event.channel_id,
+        fromIndex: replyCursor,
+        timeoutMs: remainingTimeout(timeoutMs, startedAt),
+        pollIntervalMs
+      })
+      replyCursor = observedReply.index + 1
+      opts.onProgress?.(`PASS live Discord reply observed: ${observedReply.reply.message.id}`)
+      turns.push({
+        observedEvent: accepted.event,
+        handoff: accepted.handoff,
+        reply: observedReply.reply
+      })
+    }
 
-    return { ok: true, target, observedEvent: accepted.event, handoff: accepted.handoff, reply }
+    return { ok: true, target, turns }
   } catch (error) {
+    const lastTurn = turns.at(-1)
     return {
       ok: false,
+      turns,
       target,
-      observedEvent: observed?.event,
+      observedEvent: lastTurn?.observedEvent,
       error: error instanceof Error ? error.message : String(error),
       hint: 'Keep this command running while you send a real message in Discord. Verify Centaur workers can produce final deliveries.'
     }
@@ -192,6 +256,26 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
   ].join('\n')
 }
 
+export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): string {
+  if (!result.ok) {
+    const hint = result.hint ? `\n      ${result.hint}` : ''
+    const completed = result.turns.length ? `\nPASS live session turns completed: ${result.turns.length}` : ''
+    return `FAIL live Discord dogfood session: ${result.error}${completed}${hint}`
+  }
+  const target = result.target.createdThread
+    ? `${channelLabel(result.target.channel)} -> ${result.target.createdThread.name ?? result.target.createdThread.id} (${result.target.conversationChannelId})`
+    : `${channelLabel(result.target.channel)} (${result.target.conversationChannelId})`
+  return [
+    'PASS live Discord dogfood session completed',
+    `PASS target: ${target}`,
+    `PASS turns completed: ${result.turns.length}`,
+    ...result.turns.map((turn, index) => {
+      const text = turn.observedEvent.parts[0]?.text ?? '(missing)'
+      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}`
+    })
+  ].join('\n')
+}
+
 class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
   readonly isTarget: (event: NormalizedDiscordEvent) => boolean
   readonly onAccepted: (value: {
@@ -215,6 +299,35 @@ class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
       this.onAccepted({ event, handoff: result })
     }
     return result
+  }
+}
+
+class LiveTurnTracker {
+  readonly accepted: Array<{ event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }> = []
+  readonly waiters: Array<() => void> = []
+
+  accept(value: { event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }): void {
+    this.accepted.push(value)
+    const waiters = this.waiters.splice(0)
+    for (const resolve of waiters) resolve()
+  }
+
+  async next(
+    index: number,
+    timeoutMs: number,
+    timeoutMessage: string
+  ): Promise<{ event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }> {
+    if (this.accepted[index]) return this.accepted[index]
+    await withTimeout(
+      new Promise<void>(resolve => {
+        this.waiters.push(resolve)
+      }),
+      timeoutMs,
+      timeoutMessage
+    )
+    const accepted = this.accepted[index]
+    if (!accepted) throw new Error(timeoutMessage)
+    return accepted
   }
 }
 
@@ -260,14 +373,18 @@ async function waitForReply(opts: {
   config: AppConfig
   discord: ObservingDiscordClient
   channelId: string
+  fromIndex: number
   timeoutMs: number
   pollIntervalMs: number
-}): Promise<ObservedReply> {
+}): Promise<{ reply: ObservedReply; index: number }> {
   const started = Date.now()
   while (Date.now() - started < opts.timeoutMs) {
     await pollFinalDeliveriesOnce(opts.config, opts.discord)
-    const reply = opts.discord.observedReplies.find(item => item.channelId === opts.channelId)
-    if (reply) return reply
+    const replyIndex = opts.discord.observedReplies.findIndex(
+      (item, index) => index >= opts.fromIndex && item.channelId === opts.channelId
+    )
+    const reply = opts.discord.observedReplies[replyIndex]
+    if (reply) return { reply, index: replyIndex }
     await sleep(opts.pollIntervalMs)
   }
   throw new Error(`timed out waiting for a Discord final-delivery reply in ${opts.channelId}`)
@@ -379,6 +496,10 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 
 function remainingTimeout(timeoutMs: number, startedAt: number): number {
   return Math.max(1_000, timeoutMs - (Date.now() - startedAt))
+}
+
+function sessionTurnLimit(value: number | undefined): number {
+  return positiveInt(value) ?? 1
 }
 
 function positiveInt(value: number | undefined): number | undefined {

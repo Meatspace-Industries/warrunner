@@ -1,7 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
 import { loadConfig, type AppConfig } from '../config'
 import type { DiscordGatewayPayload } from '../discord/types'
-import { formatLiveDogfood, runLiveDogfood } from './live'
+import {
+  formatLiveDogfood,
+  formatLiveDogfoodSession,
+  runLiveDogfood,
+  runLiveDogfoodSession
+} from './live'
 
 type CapturedRequest = {
   path: string
@@ -13,12 +18,12 @@ const forumThreads: CapturedRequest[] = []
 const workflowRuns: CapturedRequest[] = []
 const discordPosts: CapturedRequest[] = []
 const delivered: CapturedRequest[] = []
+const pendingDeliveries: any[] = []
 
 let activeGateway: any = null
 let liveThreadCreated = false
-let liveMessageSent = false
-let finalDeliveryReady = false
-let finalDeliveryClaimed = false
+let liveMessageCursor = 0
+let liveMessages: string[] = []
 
 const server = Bun.serve({
   port: 0,
@@ -76,43 +81,40 @@ const server = Bun.serve({
     }
     if (url.pathname === '/channels/live-thread-1/messages' && request.method === 'POST') {
       discordPosts.push(await capture(request, url.pathname))
-      return Response.json({ id: 'reply-msg-1', channel_id: 'live-thread-1' })
+      setTimeout(sendLiveDiscordMessage, 10)
+      return Response.json({ id: `reply-msg-${discordPosts.length}`, channel_id: 'live-thread-1' })
     }
     if (url.pathname === '/workflows/runs' && request.method === 'POST') {
-      workflowRuns.push(await capture(request, url.pathname))
-      finalDeliveryReady = true
+      const captured = await capture(request, url.pathname)
+      workflowRuns.push(captured)
+      const runIndex = workflowRuns.length
+      pendingDeliveries.push({
+        execution_id: `exec-${runIndex}`,
+        thread_key: 'discord:guild-1:forum-1:live-thread-1',
+        delivery: {
+          platform: 'discord',
+          guild_id: 'guild-1',
+          channel_id: 'live-thread-1',
+          thread_id: 'live-thread-1'
+        },
+        final_payload: {
+          result_text:
+            runIndex === 1 ? 'live dogfood final answer' : `live dogfood final answer ${runIndex}`
+        }
+      })
       return Response.json({ ok: true, run_id: 'run-1' })
     }
     if (url.pathname === '/agent/final-deliveries/claim' && request.method === 'POST') {
       await request.json()
-      if (!finalDeliveryReady || finalDeliveryClaimed) {
-        return Response.json({ deliveries: [] })
-      }
-      finalDeliveryClaimed = true
-      return Response.json({
-        deliveries: [
-          {
-            execution_id: 'exec-1',
-            thread_key: 'discord:guild-1:forum-1:live-thread-1',
-            delivery: {
-              platform: 'discord',
-              guild_id: 'guild-1',
-              channel_id: 'live-thread-1',
-              thread_id: 'live-thread-1'
-            },
-            final_payload: {
-              result_text: 'live dogfood final answer'
-            }
-          }
-        ]
-      })
+      return Response.json({ deliveries: pendingDeliveries.splice(0, 5) })
     }
     if (
-      url.pathname === '/agent/final-deliveries/exec-1/delivered' &&
+      url.pathname.startsWith('/agent/final-deliveries/') &&
+      url.pathname.endsWith('/delivered') &&
       request.method === 'POST'
     ) {
       delivered.push(await capture(request, url.pathname))
-      return Response.json({ ok: true, execution_id: 'exec-1' })
+      return Response.json({ ok: true })
     }
     return Response.json({ error: 'not_found', path: url.pathname }, { status: 404 })
   },
@@ -139,11 +141,11 @@ beforeEach(() => {
   workflowRuns.length = 0
   discordPosts.length = 0
   delivered.length = 0
+  pendingDeliveries.length = 0
   activeGateway = null
   liveThreadCreated = false
-  liveMessageSent = false
-  finalDeliveryReady = false
-  finalDeliveryClaimed = false
+  liveMessageCursor = 0
+  liveMessages = ['live dogfood from Discord']
 })
 
 afterAll(() => {
@@ -206,6 +208,31 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
   })
 
+  it('keeps a live session open for multiple Discord turns', async () => {
+    liveMessages = ['first session turn', 'second session turn']
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open multi-turn dogfood',
+      turnLimit: 2,
+      timeoutMs: 2_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfoodSession(result)
+
+    expect(result.ok).toBe(true)
+    expect(workflowRuns).toHaveLength(2)
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('first session turn')
+    expect(workflowRuns[1]?.body.input.parts[0].text).toBe('second session turn')
+    expect(discordPosts.map(post => post.body.content)).toEqual([
+      'live dogfood final answer',
+      'live dogfood final answer 2'
+    ])
+    expect(delivered).toHaveLength(2)
+    expect(formatted).toContain('PASS live Discord dogfood session completed')
+    expect(formatted).toContain('PASS turns completed: 2')
+    expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
+  })
+
   it('fails before writing when the target forum is not configured as a Warrunner route', async () => {
     const result = await runLiveDogfood(
       testConfig({
@@ -230,13 +257,16 @@ describe('live dogfood chat loop', () => {
 })
 
 function sendLiveDiscordMessage(): void {
-  if (!activeGateway || !liveThreadCreated || liveMessageSent) return
-  liveMessageSent = true
+  if (!activeGateway || !liveThreadCreated) return
+  const content = liveMessages[liveMessageCursor]
+  if (!content) return
+  const messageIndex = liveMessageCursor + 1
+  liveMessageCursor += 1
   activeGateway.send(
     JSON.stringify({
       op: 0,
       t: 'THREAD_CREATE',
-      s: 1,
+      s: messageIndex * 2 - 1,
       d: {
         id: 'live-thread-1',
         type: 11,
@@ -249,12 +279,12 @@ function sendLiveDiscordMessage(): void {
     JSON.stringify({
       op: 0,
       t: 'MESSAGE_CREATE',
-      s: 2,
+      s: messageIndex * 2,
       d: {
-        id: 'live-msg-1',
+        id: `live-msg-${messageIndex}`,
         channel_id: 'live-thread-1',
         guild_id: 'guild-1',
-        content: '<@bot-user> live dogfood from Discord',
+        content: `<@bot-user> ${content}`,
         author: { id: 'user-1' },
         mentions: [{ id: 'bot-user' }],
         attachments: []
