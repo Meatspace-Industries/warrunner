@@ -216,15 +216,17 @@ export async function runLiveDogfoodSession(
       }
     )
     const processMessage = createDiscordMessageProcessor({ config, discord, channels, handoff })
-    const processLiveMessage = dedupeDiscordMessageProcessor(message => {
-      if (!liveMessageMatchesOperator(message, operatorUserId)) return Promise.resolve()
-      if (!target) {
-        pendingLiveMessages.push(message)
-        return Promise.resolve()
-      }
-      if (message.channel_id !== target.conversationChannelId) return Promise.resolve()
-      return processMessage(message)
-    })
+    const processLiveMessage = serializeDiscordMessageProcessor(
+      dedupeDiscordMessageProcessor(message => {
+        if (!liveMessageMatchesOperator(message, operatorUserId)) return Promise.resolve()
+        if (!target) {
+          pendingLiveMessages.push(message)
+          return Promise.resolve()
+        }
+        if (message.channel_id !== target.conversationChannelId) return Promise.resolve()
+        return processMessage(message)
+      })
+    )
     gatewayHandle = startLiveGateway(config, discord, channels, processLiveMessage)
     if (!gatewayHandle) {
       return {
@@ -285,7 +287,7 @@ export async function runLiveDogfoodSession(
           processMessage: processLiveMessage,
           seenMessageIds: historyIntakeSeenMessageIds,
           operatorUserId,
-          timeoutMs: remainingTimeout(timeoutMs, startedAt),
+          timeoutMs: waitTimeoutMs({ timeoutMs, startedAt, resetEachWait: untilTimeout }),
           pollIntervalMs,
           timeoutMessage: nextMessageTimeout,
           onProgress: opts.onProgress
@@ -314,7 +316,7 @@ export async function runLiveDogfoodSession(
         executionId: accepted.executionId,
         finalDeliveryReplies,
         fromIndex: replyCursor,
-        timeoutMs: remainingTimeout(timeoutMs, startedAt),
+        timeoutMs: waitTimeoutMs({ timeoutMs, startedAt, resetEachWait: untilTimeout }),
         pollIntervalMs
       })
       replyCursor = observedReply.index + 1
@@ -588,6 +590,17 @@ function dedupeDiscordMessageProcessor(
     if (seenMessageIds.has(message.id)) return
     seenMessageIds.add(message.id)
     await processMessage(message)
+  }
+}
+
+function serializeDiscordMessageProcessor(
+  processMessage: (message: DiscordMessage) => Promise<void>
+): (message: DiscordMessage) => Promise<void> {
+  let queue = Promise.resolve()
+  return message => {
+    const next = queue.then(() => processMessage(message))
+    queue = next.catch(() => {})
+    return next
   }
 }
 
@@ -982,7 +995,15 @@ function isThreadChannel(channel: DiscordChannel): boolean {
 }
 
 function remainingTimeout(timeoutMs: number, startedAt: number): number {
-  return Math.max(1_000, timeoutMs - (Date.now() - startedAt))
+  return Math.max(1, timeoutMs - (Date.now() - startedAt))
+}
+
+function waitTimeoutMs(opts: {
+  timeoutMs: number
+  startedAt: number
+  resetEachWait: boolean
+}): number {
+  return opts.resetEachWait ? opts.timeoutMs : remainingTimeout(opts.timeoutMs, opts.startedAt)
 }
 
 function sessionTurnLimit(value: number | undefined): number {

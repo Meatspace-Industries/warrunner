@@ -53,6 +53,7 @@ let externalDeliveryClaimedByService = false
 let externalDeliveryReferencesAcceptedMessage = true
 let workflowResponseIncludesExecutionId = true
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
+let liveMessageScheduleDelaysMs: number[] = []
 
 const server = Bun.serve({
   port: 0,
@@ -310,6 +311,7 @@ beforeEach(() => {
   externalDeliveryClaimedByService = false
   externalDeliveryReferencesAcceptedMessage = true
   workflowResponseIncludesExecutionId = true
+  liveMessageScheduleDelaysMs = []
 })
 
 afterAll(() => {
@@ -755,6 +757,38 @@ describe('live dogfood chat loop', () => {
     expect(workflowRuns[0]?.body.input.parts[0].text).toBe('open-ended session turn')
     expect(progress).toContain('PASS live Discord session idle timeout after 1 turns')
     expect(formatted).toContain('PASS turns completed: 1')
+    expect(formatted).toContain('PASS stop reason: idle_timeout')
+  })
+
+  it('resets open-ended chat timeout after each completed Discord turn', async () => {
+    liveMessages = ['first resettable timeout turn', 'second resettable timeout turn']
+    deliveryTexts = ['first resettable timeout answer', 'second resettable timeout answer']
+    liveMessageScheduleDelaysMs = [50, 180]
+    const progress: string[] = []
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open resettable-timeout dogfood',
+      untilTimeout: true,
+      timeoutMs: 220,
+      pollIntervalMs: 10,
+      onProgress: line => progress.push(line)
+    })
+    const formatted = formatLiveDogfoodSession(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.turns).toHaveLength(2)
+    expect(result.stopReason).toBe('idle_timeout')
+    expect(workflowRuns.map(run => run.body.input.parts[0].text)).toEqual([
+      'first resettable timeout turn',
+      'second resettable timeout turn'
+    ])
+    expect(discordPosts.map(post => post.body.content)).toEqual([
+      'first resettable timeout answer',
+      'second resettable timeout answer'
+    ])
+    expect(progress).toContain('PASS live Discord session idle timeout after 2 turns')
+    expect(formatted).toContain('PASS turns completed: 2')
     expect(formatted).toContain('PASS stop reason: idle_timeout')
   })
 
@@ -1274,11 +1308,12 @@ function sendGatewayUserMessage(opts: {
 }
 
 function scheduleLiveDiscordMessage(attempts = 500): void {
+  const delayMs = liveMessageScheduleDelaysMs.shift() ?? 10
   const timer = setTimeout(() => {
     liveMessageTimers = liveMessageTimers.filter(item => item !== timer)
     const result = sendLiveDiscordMessage()
     if (result === 'not_ready' && attempts > 0) scheduleLiveDiscordMessage(attempts - 1)
-  }, 10)
+  }, delayMs)
   liveMessageTimers.push(timer)
 }
 
