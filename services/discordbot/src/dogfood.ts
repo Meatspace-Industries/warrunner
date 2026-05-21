@@ -1,6 +1,7 @@
 import { centaurApiKey, homeChannelIds, loadConfig, type AppConfig } from './config'
 import { DiscordApiError, DiscordClient } from './discord/client'
 import type { DiscordUser } from './discord/types'
+import { loadDogfoodEnv, parseDogfoodGlobalArgs } from './dogfood/env-file'
 import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
 import {
   formatLiveDogfood,
@@ -75,59 +76,68 @@ export function formatPreflight(result: PreflightResult): string {
 
 if (import.meta.main) {
   const command = process.argv[2] ?? 'preflight'
+  const globalArgs = parseDogfoodGlobalArgs(process.argv.slice(3))
+  if (globalArgs.error) {
+    console.error(globalArgs.error)
+    process.exit(2)
+  }
+  const env = await loadDogfoodEnv(process.env, globalArgs.envFile).catch(error => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(2)
+  })
   if (command === 'emulated') {
     const result = await runEmulatedChatLoop()
     console.log(formatEmulatedChatLoop(result))
     process.exit(result.ok ? 0 : 1)
   }
   if (command === 'smoke') {
-    const argChannelId = process.argv[3]?.trim()
-    const channelId = argChannelId || process.env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
-    const contentArgs = argChannelId ? process.argv.slice(4) : process.argv.slice(3)
-    const result = await runSmokePost(loadConfig(), {
+    const argChannelId = globalArgs.positional[0]?.trim()
+    const channelId = argChannelId || env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
+    const contentArgs = argChannelId ? globalArgs.positional.slice(1) : globalArgs.positional
+    const result = await runSmokePost(loadConfig(env), {
       channelId,
       content: contentArgs.join(' '),
-      appliedTagIds: splitList(process.env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? '')
+      appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? '')
     })
     console.log(formatSmokePost(result))
     process.exit(result.ok ? 0 : 1)
   }
   if (command === 'live') {
-    const config = loadConfig()
+    const config = loadConfig(env)
     const preflight = await runPreflight(config)
     console.log(formatPreflight(preflight))
     if (!preflight.ok) process.exit(1)
 
-    const args = parseDogfoodCliArgs(process.argv.slice(3))
+    const args = parseDogfoodCliArgs(globalArgs.positional, env)
     const argChannelId = args.positional[0]?.trim()
-    const channelId = argChannelId || process.env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
+    const channelId = argChannelId || env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
     const contentArgs = argChannelId ? args.positional.slice(1) : args.positional
     const result = await runLiveDogfood(config, {
       channelId,
       content: contentArgs.join(' '),
-      appliedTagIds: splitList(process.env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
-      timeoutMs: parsePositiveInt(process.env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
+      appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
+      timeoutMs: parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfood(result))
     process.exit(result.ok ? 0 : 1)
   }
   if (command === 'session') {
-    const config = loadConfig()
+    const config = loadConfig(env)
     const preflight = await runPreflight(config)
     console.log(formatPreflight(preflight))
     if (!preflight.ok) process.exit(1)
 
-    const args = parseDogfoodCliArgs(process.argv.slice(3))
+    const args = parseDogfoodCliArgs(globalArgs.positional, env)
     const argChannelId = args.positional[0]?.trim()
-    const channelId = argChannelId || process.env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
+    const channelId = argChannelId || env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
     const contentArgs = argChannelId ? args.positional.slice(1) : args.positional
     const result = await runLiveDogfoodSession(config, {
       channelId,
       content: contentArgs.join(' '),
-      appliedTagIds: splitList(process.env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
-      timeoutMs: parsePositiveInt(process.env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
-      turnLimit: parsePositiveInt(process.env.WARRUNNER_DOGFOOD_SESSION_TURNS) ?? 3,
+      appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
+      timeoutMs: parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
+      turnLimit: parsePositiveInt(env.WARRUNNER_DOGFOOD_SESSION_TURNS) ?? 3,
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfoodSession(result))
@@ -136,11 +146,11 @@ if (import.meta.main) {
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--open] <channel-id> [message]'
+      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--open] <channel-id> [message]'
     )
     process.exit(2)
   }
-  const result = await runPreflight()
+  const result = await runPreflight(loadConfig(env))
   console.log(formatPreflight(result))
   process.exit(result.ok ? 0 : 1)
 }

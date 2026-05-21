@@ -76,13 +76,16 @@ pnpm --filter discordbot dogfood:preflight
 ```
 
 To dogfood against an existing Meatspace host environment without copying
-secrets into the repo, run Bun directly with the host env file:
+secrets into the repo, point the dogfood CLI at the host env file:
 
 ```bash
-cd services/discordbot
-bun --env-file=/var/lib/meepo/hermes/.env src/dogfood.ts preflight
-bun --env-file=/var/lib/meepo/hermes/.env src/dogfood.ts session
+pnpm --filter discordbot dogfood:preflight -- --dogfood-env-file=/var/lib/meepo/hermes/.env
+pnpm --filter discordbot dogfood:session -- --dogfood-env-file=/var/lib/meepo/hermes/.env --open
 ```
+
+You can also set `WARRUNNER_DOGFOOD_ENV_FILE=/var/lib/meepo/hermes/.env` once
+and omit the flag. The direct Bun CLI also accepts `--env-file`; prefer
+`--dogfood-env-file` with pnpm because pnpm reserves `--env-file`.
 
 Warrunner accepts the existing Meepo Discord aliases when the Warrunner-specific
 values are not set: `MEEPO_DISCORD_GUILD_ID` for `DISCORD_GUILD_ID`,
