@@ -209,7 +209,7 @@ if (import.meta.main) {
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfoodSession(result))
-    const transcriptOk = await reportDogfoodTranscript('session', result, transcriptDir)
+    const transcriptOk = await reportDogfoodTranscript('chat', result, transcriptDir)
     process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }
   if (command !== 'preflight') {
@@ -260,7 +260,7 @@ function addRequiredConfigChecks(config: AppConfig, checks: Check[]): void {
 }
 
 async function reportDogfoodTranscript(
-  command: 'live' | 'session',
+  command: 'live' | 'session' | 'chat',
   result: LiveDogfoodResult | LiveDogfoodSessionResult,
   transcriptDir: string | undefined
 ): Promise<boolean> {

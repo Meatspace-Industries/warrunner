@@ -9,7 +9,7 @@ import {
   type LiveDogfoodSessionResult
 } from './live'
 
-type TranscriptCommand = 'live' | 'session'
+type TranscriptCommand = 'live' | 'session' | 'chat'
 type TranscriptResult = LiveDogfoodResult | LiveDogfoodSessionResult
 
 export type WriteDogfoodTranscriptResult =

@@ -345,12 +345,12 @@ describe('dogfood CLI live session', () => {
 
       const transcripts = await readdir(transcriptDir)
       expect(transcripts).toHaveLength(1)
-      expect(transcripts[0]).toContain('session')
+      expect(transcripts[0]).toContain('chat')
       expect(transcripts[0]).toContain('pass')
       const transcriptText = await readFile(join(transcriptDir, transcripts[0] ?? ''), 'utf8')
       const transcript = JSON.parse(transcriptText) as any
       expect(transcript).toMatchObject({
-        command: 'session',
+        command: 'chat',
         ok: true,
         stop_reason: 'idle_timeout',
         target: {

@@ -79,9 +79,9 @@ pnpm --filter discordbot dogfood:preflight
 To dogfood against an existing Meatspace host environment without copying
 secrets into the repo, use the host wrapper. It defaults to
 `/var/lib/meepo/hermes/.env`, runs from the repo root, opens the Discord target
-automatically for live/session commands, and writes live/session JSON
+automatically for live/session commands, and writes live/session/chat JSON
 transcripts under `/var/lib/meepo/warrunner/dogfood-transcripts`. For
-live/session commands, it validates transcript directory writability before
+live/session/chat commands, it validates transcript directory writability before
 starting pnpm or opening a Discord target:
 
 ```bash
@@ -114,7 +114,7 @@ You can also set `WARRUNNER_DOGFOOD_ENV_FILE=/var/lib/meepo/hermes/.env` once
 and omit the flag. The direct Bun CLI also accepts `--env-file`; prefer
 `--dogfood-env-file` with pnpm because pnpm reserves `--env-file`.
 Set `WARRUNNER_DOGFOOD_TRANSCRIPT_DIR`, or pass `--transcript-dir`, to write a
-live/session JSON transcript somewhere else under `/var/lib/meepo`.
+live/session/chat JSON transcript somewhere else under `/var/lib/meepo`.
 
 Warrunner accepts the existing Meepo Discord aliases when the Warrunner-specific
 values are not set: `MEEPO_DISCORD_GUILD_ID` for `DISCORD_GUILD_ID`,
@@ -176,10 +176,10 @@ message. Formatted output and transcripts mark each reply source as
 `final_delivery` or `channel_history` so operator runs show whether the CLI or
 an already-running Discordbot observed the answer. The Meatspace host wrapper
 defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`. If a
-transcript directory is configured, live/session dogfood exits nonzero when the
+transcript directory is configured, live/session/chat dogfood exits nonzero when the
 transcript cannot be written. Both the host wrapper and the direct dogfood CLI
 validate the transcript directory before Discord preflight or live chat begins.
-During live/session waits, the CLI also polls fresh target-channel history and
+During live/session/chat waits, the CLI also polls fresh target-channel history and
 feeds missed user messages through the same Discord normalization and handoff
 path as Gateway events, so a dropped Gateway dispatch does not strand a manual
 dogfood session.
