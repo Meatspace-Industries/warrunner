@@ -68,6 +68,28 @@ echo "$host_preflight_output"
 grep -q "PASS DISCORD_GATEWAY_ENABLED: enabled" <<<"$host_preflight_output"
 grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$host_preflight_output"
 echo
+host_chat_dir="$(mktemp -d)"
+echo "==> meatspace/scripts/warrunner-live-dogfood.sh chat --env-file services/discordbot/.env.example --transcript-dir $host_chat_dir --no-open -- 123456789012345678"
+if host_chat_output="$(
+  meatspace/scripts/warrunner-live-dogfood.sh chat \
+    --env-file services/discordbot/.env.example \
+    --transcript-dir "$host_chat_dir" \
+    --no-open \
+    -- 123456789012345678 2>&1
+)"; then
+  echo "$host_chat_output"
+  rm -rf "$host_chat_dir"
+  echo "Expected host dogfood chat to fail with blank live credentials." >&2
+  exit 1
+fi
+rm -rf "$host_chat_dir"
+echo "$host_chat_output"
+grep -q "Warrunner live dogfood command: chat" <<<"$host_chat_output"
+grep -q "dogfood:session" <<<"$host_chat_output"
+grep -q -- "--until-timeout" <<<"$host_chat_output"
+grep -q -- "--timeout-ms=3600000" <<<"$host_chat_output"
+grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$host_chat_output"
+echo
 echo "==> meatspace/scripts/warrunner-live-dogfood.sh session --env-file services/discordbot/.env.example --transcript-dir /dev/null/warrunner --no-open"
 if host_transcript_output="$(
   meatspace/scripts/warrunner-live-dogfood.sh session \

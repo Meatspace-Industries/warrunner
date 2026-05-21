@@ -86,14 +86,22 @@ starting pnpm or opening a Discord target:
 
 ```bash
 just warrunner-live-dogfood preflight
-just warrunner-live-dogfood session
+just warrunner-live-dogfood chat
 ```
 
-To pass an explicit target channel or forum id:
+`chat` is the one-command Discord-window loop: it runs `dogfood:session`,
+opens Discord by default, uses transcripts, and adds `--until-timeout
+--timeout-ms=3600000` unless you pass an explicit turn or timeout setting. To
+pass an explicit target channel, forum, thread, or home channel id:
 
 ```bash
-just warrunner-live-dogfood session -- <channel-or-forum-id>
+just warrunner-live-dogfood chat -- <channel-or-forum-id>
 ```
+
+To attach to an existing thread or home channel without posting a new setup
+prompt, run `just warrunner-live-dogfood chat -- --attach <thread-or-home-channel-id>`.
+Set `WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS` to change the host wrapper's default
+one-hour chat timeout.
 
 The lower-level dogfood CLI can also be pointed at the host env file directly:
 
@@ -196,6 +204,8 @@ tightest local loop, run
 `pnpm --filter discordbot dogfood:session -- --open --turns 12 --timeout-ms 600000 <channel-or-forum-id>`.
 For open-ended Discord-window iteration, run
 `pnpm --filter discordbot dogfood:session -- --open --until-timeout --timeout-ms 3600000 <channel-or-forum-id>`.
+The Meatspace host wrapper shortens this to
+`just warrunner-live-dogfood chat -- <channel-or-forum-id>`.
 To reattach to an already-open forum thread or home channel without posting a
 new setup prompt, pass `--attach`:
 

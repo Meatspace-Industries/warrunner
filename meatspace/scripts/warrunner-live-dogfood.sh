@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: meatspace/scripts/warrunner-live-dogfood.sh [preflight|smoke|live|session] [options] [--] [dogfood args...]
+Usage: meatspace/scripts/warrunner-live-dogfood.sh [preflight|smoke|live|session|chat] [options] [--] [dogfood args...]
 
 Runs Warrunner's live Discord dogfood commands against the Meatspace host env
 file without copying secrets into the repo.
@@ -13,6 +13,7 @@ Commands:
   smoke       Post a Discord smoke message or create a forum smoke thread.
   live        Run one live Discord-window turn.
   session     Run a multi-turn live Discord-window session. Default.
+  chat        Run an open-ended one-hour Discord-window session.
 
 Options:
   --env-file <path>          Env file to load. Default: /var/lib/meepo/hermes/.env
@@ -34,6 +35,8 @@ Examples:
   meatspace/scripts/warrunner-live-dogfood.sh session -- --turns 12 --timeout-ms 600000 123456789012345678
   meatspace/scripts/warrunner-live-dogfood.sh session -- --until-timeout --timeout-ms 3600000 123456789012345678
   meatspace/scripts/warrunner-live-dogfood.sh session -- --attach --turns 12 123456789012345678
+  meatspace/scripts/warrunner-live-dogfood.sh chat -- 123456789012345678
+  meatspace/scripts/warrunner-live-dogfood.sh chat -- --attach 123456789012345678
 USAGE
 }
 
@@ -73,9 +76,22 @@ ensure_transcript_dir_writable() {
   rm -f "$probe"
 }
 
+passthrough_has() {
+  local candidate
+  local flag
+  for candidate in "${passthrough[@]}"; do
+    for flag in "$@"; do
+      if [[ "$candidate" == "$flag" || "$candidate" == "$flag="* ]]; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    preflight|smoke|live|session)
+    preflight|smoke|live|session|chat)
       if [[ -n "$command" ]]; then
         passthrough+=("$1")
       else
@@ -136,6 +152,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 command="${command:-session}"
+dogfood_command="$command"
+if [[ "$command" == "chat" ]]; then
+  dogfood_command="session"
+fi
 case "$env_file" in
   /*) ;;
   *) env_file="$repo_root/$env_file" ;;
@@ -156,23 +176,34 @@ The Meatspace host default is /var/lib/meepo/hermes/.env.
 EOF
   exit 1
 fi
-if [[ ( "$command" == "live" || "$command" == "session" ) && -n "$transcript_dir" ]]; then
+if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && -n "$transcript_dir" ]]; then
   ensure_transcript_dir_writable "$transcript_dir"
 fi
 
-script="dogfood:$command"
+script="dogfood:$dogfood_command"
 dogfood_args=(--dogfood-env-file="$env_file")
-if [[ ( "$command" == "live" || "$command" == "session" ) && -n "$transcript_dir" ]]; then
+if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && -n "$transcript_dir" ]]; then
   dogfood_args+=(--transcript-dir="$transcript_dir")
 fi
-if [[ ( "$command" == "live" || "$command" == "session" ) && "$open_discord" == 1 && "$open_explicit" == 0 ]]; then
+if [[ "$command" == "chat" ]]; then
+  if ! passthrough_has --turns --session-turns --until-timeout --until-idle --no-turn-limit; then
+    dogfood_args+=(--until-timeout)
+  fi
+  if ! passthrough_has --timeout-ms; then
+    dogfood_args+=(--timeout-ms="${WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS:-3600000}")
+  fi
+fi
+if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && "$open_discord" == 1 && "$open_explicit" == 0 ]]; then
   dogfood_args+=(--open)
 fi
 
 cd "$repo_root"
 echo "==> Warrunner live dogfood command: $command"
+if [[ "$command" != "$dogfood_command" ]]; then
+  echo "==> Warrunner dogfood script: $script"
+fi
 echo "==> Warrunner dogfood env file: $env_file"
-if [[ ( "$command" == "live" || "$command" == "session" ) && -n "$transcript_dir" ]]; then
+if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && -n "$transcript_dir" ]]; then
   echo "==> Warrunner dogfood transcript dir: $transcript_dir"
 fi
 exec pnpm --filter discordbot "$script" -- "${dogfood_args[@]}" "${passthrough[@]+"${passthrough[@]}"}"
