@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { loadConfig, type AppConfig } from './config'
 import { formatPreflight, runPreflight } from './dogfood'
+import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
 
 const centaurAuthHeaders: string[] = []
 
@@ -77,6 +78,19 @@ describe('dogfood preflight', () => {
     expect(failed).toContain('DISCORD_GUILD_ID')
     expect(failed).toContain('home route')
     expect(formatPreflight(result)).toContain('FAIL warrunner dogfood preflight failed')
+  })
+})
+
+describe('dogfood emulated chat loop', () => {
+  it('runs the full local Gateway-to-Discord-reply loop', async () => {
+    const result = await runEmulatedChatLoop()
+    const formatted = formatEmulatedChatLoop(result)
+
+    expect(result.ok).toBe(true)
+    expect(result.workflowRun?.body.workflow_name).toBe('discord_thread_turn')
+    expect(result.discordPost?.body.content).toBe('gateway-to-discord final answer')
+    expect(formatted).toContain('PASS emulated Discord Gateway MESSAGE_CREATE received')
+    expect(formatted).toContain('PASS Discord reply posted')
   })
 })
 

@@ -1,6 +1,7 @@
 import { centaurApiKey, homeChannelIds, loadConfig, type AppConfig } from './config'
 import { DiscordApiError, DiscordClient } from './discord/client'
 import type { DiscordUser } from './discord/types'
+import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
 
 type Check = {
   name: string
@@ -66,9 +67,16 @@ export function formatPreflight(result: PreflightResult): string {
 
 if (import.meta.main) {
   const command = process.argv[2] ?? 'preflight'
+  if (command === 'emulated') {
+    const result = await runEmulatedChatLoop()
+    console.log(formatEmulatedChatLoop(result))
+    process.exit(result.ok ? 0 : 1)
+  }
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
-    console.error('Usage: pnpm --filter discordbot dogfood:preflight')
+    console.error(
+      'Usage: pnpm --filter discordbot dogfood:preflight | pnpm --filter discordbot dogfood:emulated'
+    )
     process.exit(2)
   }
   const result = await runPreflight()

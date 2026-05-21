@@ -18,6 +18,12 @@ This does not require live Discord credentials:
 pnpm --filter discordbot test
 ```
 
+For a single terminal-visible dogfood transcript of the core Discord path:
+
+```bash
+pnpm --filter discordbot dogfood:emulated
+```
+
 The E2E test starts an in-process fake Discord API and fake Centaur API, then
 verifies:
 

@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "bun --hot --watch src/index.ts",
     "dogfood": "bun src/dogfood.ts",
+    "dogfood:emulated": "bun src/dogfood.ts emulated",
     "dogfood:preflight": "bun src/dogfood.ts preflight",
     "test": "bun test src/*.test.ts src/**/*.test.ts",
     "check:types": "bun tsgo --project tsconfig.json --noEmit"
