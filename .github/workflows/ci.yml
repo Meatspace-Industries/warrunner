@@ -126,38 +126,5 @@ jobs:
         working-directory: services/api
         run: uv sync --group dev
 
-      - name: Discordbot tests
-        run: pnpm --filter discordbot test
-
-      - name: Discordbot type check
-        run: pnpm --filter discordbot check:types
-
-      - name: Emulated Discord dogfood
-        run: pnpm --filter discordbot dogfood:emulated
-
-      - name: Discord service API config tests
-        run: uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py
-
-      - name: Build Discordbot image
-        run: docker build -f services/discordbot/Dockerfile .
-
-      - name: Build Warrunner overlay image
-        run: docker build -f meatspace/overlay/Dockerfile meatspace/overlay
-
-      - name: Lint Warrunner Helm values
-        run: helm lint contrib/chart -f meatspace/infra/helm/values.warrunner.yaml
-
-      - name: Render Warrunner Helm values
-        run: |
-          helm template warrunner contrib/chart \
-            -f meatspace/infra/helm/values.warrunner.yaml \
-            --namespace centaur-system > /tmp/warrunner-rendered.yaml
-
-      - name: Assert Discordbot deployment shape
-        run: |
-          grep -q "app.kubernetes.io/component: discordbot" /tmp/warrunner-rendered.yaml
-          grep -q "path: /health/ready" /tmp/warrunner-rendered.yaml
-          if grep -q "app.kubernetes.io/component: slackbot" /tmp/warrunner-rendered.yaml; then
-            echo "Slackbot should not render in the Warrunner values overlay" >&2
-            exit 1
-          fi
+      - name: Warrunner dogfood gates
+        run: meatspace/scripts/warrunner-dogfood-gates.sh --docker

@@ -24,6 +24,17 @@ For a single terminal-visible dogfood transcript of the core Discord path:
 pnpm --filter discordbot dogfood:emulated
 ```
 
+For the full local Warrunner Discord dogfood gate bundle:
+
+```bash
+just warrunner-dogfood-gates
+```
+
+This runs the Discordbot suite, type check, emulated dogfood loop, Discord API
+config tests, and Warrunner Helm render assertions. It also builds the
+Discordbot and Meatspace overlay images when Docker is available; use
+`just warrunner-dogfood-gates --docker` to require image builds.
+
 The E2E test starts an in-process fake Discord API and fake Centaur API, then
 verifies:
 
