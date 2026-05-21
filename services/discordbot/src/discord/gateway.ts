@@ -145,6 +145,7 @@ class DiscordGatewayRunner implements DiscordGatewayHandle {
     }
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = setInterval(() => this.heartbeat(), interval)
+    this.heartbeatTimer.unref?.()
     this.heartbeat()
   }
 
@@ -187,6 +188,7 @@ class DiscordGatewayRunner implements DiscordGatewayHandle {
       this.reconnectTimer = null
       void this.connect()
     }, this.config.DISCORD_GATEWAY_RECONNECT_MS)
+    this.reconnectTimer.unref?.()
   }
 }
 

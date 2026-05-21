@@ -30,6 +30,34 @@ describe('buildReadinessReport', () => {
     expect(failedChecks(report.checks)).toContain('route_config')
   })
 
+  it('fails when Gateway ingest is disabled', () => {
+    const report = buildReadinessReport(
+      fullConfig({
+        DISCORD_APPLICATION_ID: 'bot-user',
+        DISCORD_GATEWAY_ENABLED: 'false',
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: 'forum-1'
+      }),
+      { status: 'configured', id: 'bot-user' }
+    )
+
+    expect(report.ready).toBe(false)
+    expect(failedChecks(report.checks)).toContain('discord_gateway')
+  })
+
+  it('fails when the dogfood guild id is missing', () => {
+    const report = buildReadinessReport(
+      fullConfig({
+        DISCORD_APPLICATION_ID: 'bot-user',
+        DISCORD_GUILD_ID: '',
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: 'forum-1'
+      }),
+      { status: 'configured', id: 'bot-user' }
+    )
+
+    expect(report.ready).toBe(false)
+    expect(failedChecks(report.checks)).toContain('discord_guild_id')
+  })
+
   it('fails while bot identity is still loading without a configured mention id', () => {
     const config = fullConfig({ WARRUNNER_HOME_CHANNEL_IDS: 'home-1' })
     const report = buildReadinessReport(config, initialBotIdentityState(config))

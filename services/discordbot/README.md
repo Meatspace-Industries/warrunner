@@ -96,8 +96,8 @@ forum/home channels, Centaur health, and that `discord_thread_turn` is
 registered by the API.
 
 `/health` is a liveness endpoint. `/health/ready` is the dogfood readiness gate
-and returns non-200 until Discord credentials, Centaur credentials, route config,
-and bot mention identity are ready.
+and returns non-200 until Discord credentials, Gateway ingest, the dogfood guild
+id, Centaur credentials, route config, and bot mention identity are ready.
 
 To intentionally verify the bot can write to Discord before turning on the
 Gateway loop, post a smoke message to a text channel, an existing thread, or a

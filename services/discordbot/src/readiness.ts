@@ -37,6 +37,16 @@ export function buildReadinessReport(
       detail: config.DISCORD_BOT_TOKEN ? 'configured' : 'missing'
     },
     {
+      name: 'discord_gateway',
+      ok: config.DISCORD_GATEWAY_ENABLED,
+      detail: config.DISCORD_GATEWAY_ENABLED ? 'enabled' : 'disabled'
+    },
+    {
+      name: 'discord_guild_id',
+      ok: Boolean(config.DISCORD_GUILD_ID?.trim()),
+      detail: config.DISCORD_GUILD_ID?.trim() || 'missing'
+    },
+    {
       name: 'centaur_api_key',
       ok: Boolean(centaurApiKey(config)),
       detail: centaurApiKey(config) ? 'configured' : 'missing'

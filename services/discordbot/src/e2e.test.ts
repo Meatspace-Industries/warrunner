@@ -16,7 +16,7 @@ let finalDeliveryClaimed = false
 
 const server = Bun.serve({
   port: 0,
-  async fetch(request) {
+  async fetch(request, server) {
     const url = new URL(request.url)
     if (url.pathname === '/users/@me' && request.method === 'GET') {
       return Response.json({
@@ -24,6 +24,12 @@ const server = Bun.serve({
         username: 'warrunner',
         bot: true
       })
+    }
+    if (url.pathname === '/gateway/bot' && request.method === 'GET') {
+      return Response.json({ url: `ws://127.0.0.1:${server.port}/gateway` })
+    }
+    if (url.pathname === '/gateway' && server.upgrade(request)) {
+      return
     }
     if (url.pathname === '/channels/thread-1' && request.method === 'GET') {
       return Response.json({
@@ -117,6 +123,12 @@ const server = Bun.serve({
       return Response.json({ id: 'posted-home-1', channel_id: 'home-1' })
     }
     return Response.json({ error: 'not_found', path: url.pathname }, { status: 404 })
+  },
+  websocket: {
+    open(ws) {
+      ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 1_000 } }))
+    },
+    message() {}
   }
 })
 
@@ -125,7 +137,7 @@ const fakeBaseUrl = `http://127.0.0.1:${server.port}`
 beforeAll(() => {
   const env = process.env as Record<string, string>
   env.NODE_ENV = 'test'
-  env.DISCORD_GATEWAY_ENABLED = 'false'
+  env.DISCORD_GATEWAY_ENABLED = 'true'
   env.DISCORD_BOT_TOKEN = 'discord-token'
   delete env.DISCORD_APPLICATION_ID
   delete env.DISCORD_BOT_USER_ID
