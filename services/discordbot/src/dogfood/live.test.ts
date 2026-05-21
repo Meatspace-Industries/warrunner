@@ -24,6 +24,7 @@ const forumThreads: CapturedRequest[] = []
 const workflowRuns: CapturedRequest[] = []
 const discordPosts: CapturedRequest[] = []
 const delivered: CapturedRequest[] = []
+const failedDeliveries: CapturedRequest[] = []
 const pendingDeliveries: any[] = []
 const createdDiscordMessages: any[] = []
 const externalDiscordReplies: any[] = []
@@ -54,6 +55,7 @@ let externalDeliveryReferencesAcceptedMessage = true
 let externalDeliveryAddsUnrelatedReferencedReply = false
 let workflowResponseIncludesExecutionId = true
 let workflowRejectsNextHandoff = false
+let discordRejectsNextPost = false
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 let liveMessageScheduleDelaysMs: number[] = []
 
@@ -137,6 +139,10 @@ const server = Bun.serve({
     }
     if (url.pathname === '/channels/live-thread-1/messages' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
+      if (discordRejectsNextPost) {
+        discordRejectsNextPost = false
+        return Response.json({ message: 'Missing Permissions' }, { status: 403 })
+      }
       discordPosts.push(captured)
       const message = {
         id: `reply-msg-${discordPosts.length}`,
@@ -285,6 +291,14 @@ const server = Bun.serve({
       delivered.push(await capture(request, url.pathname))
       return Response.json({ ok: true })
     }
+    if (
+      url.pathname.startsWith('/agent/final-deliveries/') &&
+      url.pathname.endsWith('/failed') &&
+      request.method === 'POST'
+    ) {
+      failedDeliveries.push(await capture(request, url.pathname))
+      return Response.json({ ok: true })
+    }
     return Response.json({ error: 'not_found', path: url.pathname }, { status: 404 })
   },
   websocket: {
@@ -312,6 +326,7 @@ beforeEach(() => {
   workflowRuns.length = 0
   discordPosts.length = 0
   delivered.length = 0
+  failedDeliveries.length = 0
   pendingDeliveries.length = 0
   createdDiscordMessages.length = 0
   externalDiscordReplies.length = 0
@@ -335,6 +350,7 @@ beforeEach(() => {
   externalDeliveryAddsUnrelatedReferencedReply = false
   workflowResponseIncludesExecutionId = true
   workflowRejectsNextHandoff = false
+  discordRejectsNextPost = false
   liveMessageScheduleDelaysMs = []
 })
 
@@ -613,6 +629,42 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('Verify Centaur API health')
     expect(formatted).not.toContain('timed out waiting')
     expect(formatted).not.toContain('PASS Discord reply posted')
+  })
+
+  it('fails immediately when the matching final delivery cannot be posted to Discord', async () => {
+    liveMessages = ['delivery failure turn']
+    discordRejectsNextPost = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open delivery failure dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(result.observedEvent?.message_id).toBe('discord:guild-1:live-thread-1:live-msg-1')
+    expect(result.handoff?.status).toBe(200)
+    expect(result.executionId).toBe('exec-1')
+    expect(workflowRuns).toHaveLength(1)
+    expect(discordPosts).toHaveLength(0)
+    expect(delivered).toHaveLength(0)
+    expect(failedDeliveries.map(item => item.path)).toEqual([
+      '/agent/final-deliveries/exec-1/failed'
+    ])
+    expect(failedDeliveries[0]?.body).toMatchObject({
+      error: 'Missing Permissions',
+      error_class: 'discord_forbidden',
+      non_retryable: true
+    })
+    expect(formatted).toContain(
+      'FAIL live Discord chat loop: final_delivery_failed:exec-1: discord_forbidden: Missing Permissions'
+    )
+    expect(formatted).toContain(
+      'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
+    )
+    expect(formatted).toContain('PASS workflow execution: exec-1')
+    expect(formatted).not.toContain('timed out waiting for a Discord final-delivery reply')
   })
 
   it('recovers a fresh Discord message from channel history when Gateway intake misses it', async () => {

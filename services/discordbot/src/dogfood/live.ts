@@ -746,6 +746,8 @@ async function waitForReply(opts: {
     if (cached) return cached
 
     const deliveryResult = await pollFinalDeliveriesOnce(opts.config, opts.discord)
+    const failedDelivery = matchingFinalDeliveryFailure(deliveryResult.failed, opts.executionId)
+    if (failedDelivery) throw new Error(finalDeliveryFailureError(failedDelivery))
     opts.finalDeliveryReplies.record(deliveryResult.delivered, opts.discord)
     const delivered = opts.finalDeliveryReplies.take({
       executionId: opts.executionId,
@@ -760,6 +762,23 @@ async function waitForReply(opts: {
     await sleep(opts.pollIntervalMs)
   }
   throw new Error(`timed out waiting for a Discord final-delivery reply in ${opts.channelId}`)
+}
+
+function matchingFinalDeliveryFailure(
+  failed: Array<{ executionId: string; error: string; errorClass?: string }>,
+  executionId: string | undefined
+): { executionId: string; error: string; errorClass?: string } | undefined {
+  if (!executionId) return undefined
+  return failed.find(item => item.executionId === executionId)
+}
+
+function finalDeliveryFailureError(failure: {
+  executionId: string
+  error: string
+  errorClass?: string
+}): string {
+  const detail = failure.errorClass ? `${failure.errorClass}: ${failure.error}` : failure.error
+  return `final_delivery_failed:${failure.executionId}: ${detail}`
 }
 
 async function observeBotReplyFromDiscord(opts: {
