@@ -50,6 +50,12 @@ type LiveDogfoodTurn = {
   reply: ObservedReply
 }
 
+type AcceptedLiveDogfoodTurn = {
+  observedEvent: NormalizedDiscordEvent
+  handoff: CentaurHandoffResult
+  executionId?: string
+}
+
 export type LiveDogfoodResult =
   | {
       ok: true
@@ -63,6 +69,8 @@ export type LiveDogfoodResult =
       ok: false
       target?: LiveTarget
       observedEvent?: NormalizedDiscordEvent
+      handoff?: CentaurHandoffResult
+      executionId?: string
       error: string
       hint?: string
     }
@@ -78,6 +86,8 @@ export type LiveDogfoodSessionResult =
       target?: LiveTarget
       turns: LiveDogfoodTurn[]
       observedEvent?: NormalizedDiscordEvent
+      handoff?: CentaurHandoffResult
+      executionId?: string
       error: string
       hint?: string
     }
@@ -95,6 +105,8 @@ export async function runLiveDogfood(
       ok: false,
       ...(result.target ? { target: result.target } : {}),
       ...(result.observedEvent ? { observedEvent: result.observedEvent } : {}),
+      ...(result.handoff ? { handoff: result.handoff } : {}),
+      ...(result.executionId ? { executionId: result.executionId } : {}),
       error: result.error,
       hint: result.hint
     }
@@ -150,6 +162,7 @@ export async function runLiveDogfoodSession(
   const startedAt = Date.now()
   const setupMode = opts.setupMode ?? 'prompt'
   const turns: LiveDogfoodTurn[] = []
+  let acceptedTurn: AcceptedLiveDogfoodTurn | undefined
 
   try {
     const botUser = await discord.fetchCurrentUser()
@@ -227,6 +240,11 @@ export async function runLiveDogfoodSession(
         remainingTimeout(timeoutMs, startedAt),
         `timed out waiting for Discord message ${turns.length + 1} in ${target.conversationChannelId}`
       )
+      acceptedTurn = {
+        observedEvent: accepted.event,
+        handoff: accepted.handoff,
+        ...(accepted.executionId ? { executionId: accepted.executionId } : {})
+      }
       opts.onProgress?.(`PASS live Discord message accepted: ${accepted.event.message_id}`)
 
       const observedReply = await waitForReply({
@@ -248,16 +266,18 @@ export async function runLiveDogfoodSession(
         ...(accepted.executionId ? { executionId: accepted.executionId } : {}),
         reply: observedReply.reply
       })
+      acceptedTurn = undefined
     }
 
     return { ok: true, target, turns }
   } catch (error) {
-    const lastTurn = turns.at(-1)
     return {
       ok: false,
       turns,
       target,
-      observedEvent: lastTurn?.observedEvent,
+      ...(acceptedTurn ? { observedEvent: acceptedTurn.observedEvent } : {}),
+      ...(acceptedTurn ? { handoff: acceptedTurn.handoff } : {}),
+      ...(acceptedTurn?.executionId ? { executionId: acceptedTurn.executionId } : {}),
       error: error instanceof Error ? error.message : String(error),
       hint: 'Keep this command running while you send a real message in Discord. Verify Centaur workers can produce final deliveries.'
     }
@@ -269,8 +289,11 @@ export async function runLiveDogfoodSession(
 export function formatLiveDogfood(result: LiveDogfoodResult): string {
   if (!result.ok) {
     const hint = result.hint ? `\n      ${result.hint}` : ''
+    const target = result.target?.discordUrl ? `\nPASS Discord URL: ${result.target.discordUrl}` : ''
     const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
-    return `FAIL live Discord chat loop: ${result.error}${event}${hint}`
+    const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
+    const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
+    return `FAIL live Discord chat loop: ${result.error}${target}${event}${handoff}${execution}${hint}`
   }
 
   const target = result.target.createdThread
@@ -295,8 +318,12 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
 export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): string {
   if (!result.ok) {
     const hint = result.hint ? `\n      ${result.hint}` : ''
+    const target = result.target?.discordUrl ? `\nPASS Discord URL: ${result.target.discordUrl}` : ''
     const completed = result.turns.length ? `\nPASS live session turns completed: ${result.turns.length}` : ''
-    return `FAIL live Discord dogfood session: ${result.error}${completed}${hint}`
+    const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
+    const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
+    const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
+    return `FAIL live Discord dogfood session: ${result.error}${target}${completed}${event}${handoff}${execution}${hint}`
   }
   const target = result.target.createdThread
     ? `${channelLabel(result.target.channel)} -> ${result.target.createdThread.name ?? result.target.createdThread.id} (${result.target.conversationChannelId})`

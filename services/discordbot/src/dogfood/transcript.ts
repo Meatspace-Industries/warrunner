@@ -115,7 +115,32 @@ function toTranscript(
       ? {
           error: result.error,
           ...(result.hint ? { hint: result.hint } : {}),
-          ...(result.observedEvent ? { observed_message_id: result.observedEvent.message_id } : {})
+          ...(result.observedEvent ? { observed_message_id: result.observedEvent.message_id } : {}),
+          ...(result.observedEvent
+            ? {
+                failed_turn: {
+                  message_id: result.observedEvent.message_id,
+                  discord_message_id: result.observedEvent.discord.message_id,
+                  thread_key: result.observedEvent.thread_key,
+                  guild_id: result.observedEvent.guild_id,
+                  channel_id: result.observedEvent.channel_id,
+                  ...(result.observedEvent.parent_channel_id
+                    ? { parent_channel_id: result.observedEvent.parent_channel_id }
+                    : {}),
+                  user_id: result.observedEvent.user_id,
+                  text: result.observedEvent.parts.map(part => part.text).join('\n'),
+                  ...(result.executionId ? { execution_id: result.executionId } : {}),
+                  ...(result.handoff
+                    ? {
+                        handoff: {
+                          ok: result.handoff.ok,
+                          status: result.handoff.status
+                        }
+                      }
+                    : {})
+                }
+              }
+            : {})
         }
       : {})
   }

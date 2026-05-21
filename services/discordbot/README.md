@@ -168,6 +168,9 @@ Discordbot observed the answer. The Meatspace host wrapper defaults this to
 transcript directory is configured, live/session dogfood exits nonzero when the
 transcript cannot be written. Both the host wrapper and the direct dogfood CLI
 validate the transcript directory before Discord preflight or live chat begins.
+When a live run accepts a Discord message but times out before a matching reply,
+the failed transcript records the accepted message, handoff status, and
+execution id under `failed_turn`.
 
 For iterative dogfooding from the Discord window, run a short live session:
 

@@ -551,22 +551,54 @@ describe('live dogfood chat loop', () => {
     liveMessages = ['stale-only session turn']
     injectStaleDeliveryBeforeNext = true
     dropExpectedDeliveryAfterStale = true
-    const result = await runLiveDogfood(testConfig(), {
-      channelId: 'forum-1',
-      content: 'open stale-only dogfood',
-      timeoutMs: 150,
-      pollIntervalMs: 10
-    })
-    const formatted = formatLiveDogfood(result)
+    const transcriptDir = await mkdtemp(join(tmpdir(), 'warrunner-dogfood-failed-'))
+    try {
+      const result = await runLiveDogfood(testConfig(), {
+        channelId: 'forum-1',
+        content: 'open stale-only dogfood',
+        timeoutMs: 150,
+        pollIntervalMs: 10
+      })
+      const formatted = formatLiveDogfood(result)
 
-    expect(result.ok).toBe(false)
-    expect(workflowRuns).toHaveLength(1)
-    expect(discordPosts.map(post => post.body.content)).toEqual(['stale same-channel final answer'])
-    expect(delivered.map(item => item.path)).toEqual([
-      '/agent/final-deliveries/stale-exec-1/delivered'
-    ])
-    expect(formatted).toContain('timed out waiting for a Discord final-delivery reply')
-    expect(formatted).not.toContain('PASS Discord reply posted')
+      expect(result.ok).toBe(false)
+      expect(result.observedEvent?.message_id).toBe('discord:guild-1:live-thread-1:live-msg-1')
+      expect(result.handoff?.status).toBe(200)
+      expect(result.executionId).toBe('exec-1')
+      expect(workflowRuns).toHaveLength(1)
+      expect(discordPosts.map(post => post.body.content)).toEqual(['stale same-channel final answer'])
+      expect(delivered.map(item => item.path)).toEqual([
+        '/agent/final-deliveries/stale-exec-1/delivered'
+      ])
+      expect(formatted).toContain('timed out waiting for a Discord final-delivery reply')
+      expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
+      expect(formatted).toContain('PASS live Discord message accepted: discord:guild-1:live-thread-1:live-msg-1')
+      expect(formatted).toContain('PASS workflow handoff: 200')
+      expect(formatted).toContain('PASS workflow execution: exec-1')
+      expect(formatted).not.toContain('PASS Discord reply posted')
+
+      const written = await writeDogfoodTranscript({
+        command: 'live',
+        result,
+        transcriptDir,
+        now: new Date('2026-05-21T22:00:00.000Z')
+      })
+      expect(written.ok).toBe(true)
+      if (!written.ok || 'skipped' in written) throw new Error('failed transcript was not written')
+      const transcript = JSON.parse(await readFile(written.path, 'utf8')) as any
+      expect(transcript).toMatchObject({
+        ok: false,
+        observed_message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+        failed_turn: {
+          message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+          execution_id: 'exec-1',
+          text: 'stale-only session turn',
+          handoff: { ok: true, status: 200 }
+        }
+      })
+    } finally {
+      await rm(transcriptDir, { recursive: true, force: true })
+    }
   })
 
   it('writes a live session transcript without auth secrets', async () => {
