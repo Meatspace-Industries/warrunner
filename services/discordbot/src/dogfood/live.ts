@@ -11,6 +11,7 @@ type LiveDogfoodOptions = {
   channelId?: string
   content?: string
   appliedTagIds?: string[]
+  setupMode?: LiveSetupMode
   timeoutMs?: number
   pollIntervalMs?: number
   onProgress?: (line: string) => void
@@ -19,6 +20,8 @@ type LiveDogfoodOptions = {
 type LiveDogfoodSessionOptions = LiveDogfoodOptions & {
   turnLimit?: number
 }
+
+type LiveSetupMode = 'prompt' | 'attach'
 
 type LiveTarget = {
   requestedChannelId: string
@@ -144,6 +147,7 @@ export async function runLiveDogfoodSession(
   let gatewayHandle: DiscordGatewayHandle | null = null
   let target: LiveTarget | undefined
   const startedAt = Date.now()
+  const setupMode = opts.setupMode ?? 'prompt'
   const turns: LiveDogfoodTurn[] = []
 
   try {
@@ -183,21 +187,34 @@ export async function runLiveDogfoodSession(
       }
     }
 
-    const setup = await runSmokePost(config, {
-      channelId: requestedChannelId,
-      content: opts.content || livePrompt(botUser.id, timeoutMs),
-      appliedTagIds: opts.appliedTagIds
-    })
-    if (!setup.ok) {
-      gatewayHandle?.stop()
-      return {
-        ok: false,
-        turns,
-        error: setup.error,
-        hint: setup.hint
+    if (setupMode === 'attach') {
+      if (isForumChannel(requestedChannel)) {
+        gatewayHandle?.stop()
+        return {
+          ok: false,
+          turns,
+          error: `live_attach_requires_conversation_channel:${requestedChannel.id}`,
+          hint: 'Pass an existing forum thread id, home channel id, or omit --attach so live dogfood can create a forum thread.'
+        }
       }
+      target = targetFromChannel(config, requestedChannelId, requestedChannel)
+    } else {
+      const setup = await runSmokePost(config, {
+        channelId: requestedChannelId,
+        content: opts.content || livePrompt(botUser.id, timeoutMs),
+        appliedTagIds: opts.appliedTagIds
+      })
+      if (!setup.ok) {
+        gatewayHandle?.stop()
+        return {
+          ok: false,
+          turns,
+          error: setup.error,
+          hint: setup.hint
+        }
+      }
+      target = targetFromSmoke(config, requestedChannelId, setup)
     }
-    target = targetFromSmoke(config, requestedChannelId, setup)
     opts.onProgress?.(formatLiveTarget(target, botUser.id, timeoutMs))
 
     discord.armReplyObserver()
@@ -530,6 +547,21 @@ function targetFromSmoke(
   }
 }
 
+function targetFromChannel(
+  config: AppConfig,
+  requestedChannelId: string,
+  channel: DiscordChannel
+): LiveTarget {
+  const conversationChannelId = channel.id
+  const discordUrl = discordChannelUrlForChannel(config, channel, conversationChannelId)
+  return {
+    requestedChannelId,
+    channel,
+    conversationChannelId,
+    ...(discordUrl ? { discordUrl } : {})
+  }
+}
+
 function livePrompt(botUserId: string | undefined, timeoutMs: number): string {
   const mention = botUserId ? `<@${botUserId}>` : '@Warrunner'
   const seconds = Math.round(timeoutMs / 1_000)
@@ -543,9 +575,9 @@ function livePrompt(botUserId: string | undefined, timeoutMs: number): string {
 function formatLiveTarget(target: LiveTarget, botUserId: string | undefined, timeoutMs: number): string {
   const mention = botUserId ? `<@${botUserId}>` : '@Warrunner'
   const seconds = Math.round(timeoutMs / 1_000)
-  if (target.createdThread) {
+  if (target.createdThread || isThreadChannel(target.channel)) {
     return [
-      `PASS live target ready: ${channelLabel(target.channel)} -> ${target.createdThread.name ?? target.createdThread.id} (${target.conversationChannelId}); reply in that thread within ${seconds}s.`,
+      `PASS live target ready: ${conversationLabel(target)} (${target.conversationChannelId}); reply in that thread within ${seconds}s.`,
       ...(target.discordUrl ? [`PASS Discord URL: ${target.discordUrl}`] : [])
     ].join('\n')
   }
@@ -559,6 +591,11 @@ function channelLabel(channel: DiscordChannel): string {
   return channel.name ? `#${channel.name}` : channel.id
 }
 
+function conversationLabel(target: LiveTarget): string {
+  if (!target.createdThread) return channelLabel(target.channel)
+  return `${channelLabel(target.channel)} -> ${target.createdThread.name ?? target.createdThread.id}`
+}
+
 function discordChannelUrl(
   config: AppConfig,
   result: Extract<SmokePostResult, { ok: true }>,
@@ -566,6 +603,23 @@ function discordChannelUrl(
 ): string | undefined {
   const guildId = result.createdThread?.guild_id ?? result.channel.guild_id ?? config.DISCORD_GUILD_ID
   return guildId ? `https://discord.com/channels/${guildId}/${channelId}` : undefined
+}
+
+function discordChannelUrlForChannel(
+  config: AppConfig,
+  channel: DiscordChannel,
+  channelId: string
+): string | undefined {
+  const guildId = channel.guild_id ?? config.DISCORD_GUILD_ID
+  return guildId ? `https://discord.com/channels/${guildId}/${channelId}` : undefined
+}
+
+function isForumChannel(channel: DiscordChannel): boolean {
+  return channel.type === 15 || channel.type === 16
+}
+
+function isThreadChannel(channel: DiscordChannel): boolean {
+  return channel.type === 10 || channel.type === 11 || channel.type === 12
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

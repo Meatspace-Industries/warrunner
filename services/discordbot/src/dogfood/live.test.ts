@@ -82,6 +82,15 @@ const server = Bun.serve({
         }
       })
     }
+    if (url.pathname === '/channels/live-thread-1' && request.method === 'GET') {
+      return Response.json({
+        id: 'live-thread-1',
+        type: 11,
+        name: 'existing-warrunner-thread',
+        parent_id: 'forum-1',
+        guild_id: 'guild-1'
+      })
+    }
     if (url.pathname === '/channels/home-1' && request.method === 'GET') {
       return Response.json({
         id: 'home-1',
@@ -377,6 +386,54 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS turns completed: 2')
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
+  })
+
+  it('attaches to an existing forum thread without posting a setup prompt', async () => {
+    liveMessages = ['attached session turn']
+    deliveryTexts = ['attached final answer']
+    const progress: string[] = []
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'live-thread-1',
+      setupMode: 'attach',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+      onProgress: line => {
+        progress.push(line)
+        if (line.includes('PASS live target ready')) {
+          liveTargetReady = true
+          liveConversationChannelId = 'live-thread-1'
+          liveParentChannelId = 'forum-1'
+          scheduleLiveDiscordMessage()
+        }
+      }
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(true)
+    expect(forumThreads).toHaveLength(0)
+    expect(workflowRuns).toHaveLength(1)
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('attached session turn')
+    expect(discordPosts.map(post => post.body.content)).toEqual(['attached final answer'])
+    expect(progress.some(line => line.includes('reply in that thread'))).toBe(true)
+    expect(formatted).toContain('PASS target: #existing-warrunner-thread (live-thread-1)')
+    expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
+  })
+
+  it('rejects attach mode for forum parents that need a conversation thread', async () => {
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      setupMode: 'attach',
+      timeoutMs: 50,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(forumThreads).toHaveLength(0)
+    expect(workflowRuns).toHaveLength(0)
+    expect(discordPosts).toHaveLength(0)
+    expect(formatted).toContain('live_attach_requires_conversation_channel:forum-1')
+    expect(formatted).toContain('Pass an existing forum thread id')
   })
 
   it('correlates live replies to the accepted workflow execution id', async () => {

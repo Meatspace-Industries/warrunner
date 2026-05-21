@@ -125,6 +125,7 @@ if (import.meta.main) {
       channelId,
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
+      setupMode: args.attachOnly ? 'attach' : 'prompt',
       timeoutMs: args.timeoutMs ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
       pollIntervalMs: args.pollIntervalMs,
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
@@ -153,6 +154,7 @@ if (import.meta.main) {
       channelId,
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
+      setupMode: args.attachOnly ? 'attach' : 'prompt',
       timeoutMs: args.timeoutMs ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
       pollIntervalMs: args.pollIntervalMs,
       turnLimit: args.turnLimit ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_SESSION_TURNS) ?? 3,
@@ -169,7 +171,7 @@ if (import.meta.main) {
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--turns=<n>] [--timeout-ms=<ms>] [--open] <channel-id> [message]'
+      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--turns=<n>] [--timeout-ms=<ms>] [--open] <channel-id> [message]'
     )
     process.exit(2)
   }

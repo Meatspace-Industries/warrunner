@@ -11,6 +11,7 @@ describe('dogfood operator CLI args', () => {
   it('strips Discord-open flags from positional channel and message args', () => {
     expect(parseDogfoodCliArgs(['--open', 'forum-1', 'hello', 'there'])).toEqual({
       openDiscord: true,
+      attachOnly: false,
       positional: ['forum-1', 'hello', 'there']
     })
   })
@@ -22,7 +23,21 @@ describe('dogfood operator CLI args', () => {
       })
     ).toEqual({
       openDiscord: false,
+      attachOnly: false,
       positional: ['forum-1']
+    })
+  })
+
+  it('strips attach flags from positional channel and message args', () => {
+    expect(parseDogfoodCliArgs(['--attach', '--open', 'thread-1', 'hello'])).toEqual({
+      openDiscord: true,
+      attachOnly: true,
+      positional: ['thread-1', 'hello']
+    })
+    expect(parseDogfoodCliArgs(['--attach', '--prompt', 'thread-1'])).toEqual({
+      openDiscord: false,
+      attachOnly: false,
+      positional: ['thread-1']
     })
   })
 
@@ -41,6 +56,7 @@ describe('dogfood operator CLI args', () => {
       ])
     ).toEqual({
       openDiscord: true,
+      attachOnly: false,
       turnLimit: 12,
       timeoutMs: 600_000,
       pollIntervalMs: 250,
@@ -51,11 +67,13 @@ describe('dogfood operator CLI args', () => {
   it('rejects invalid session tuning values before they become message text', () => {
     expect(parseDogfoodCliArgs(['--turns=0', 'forum-1'])).toEqual({
       openDiscord: false,
+      attachOnly: false,
       positional: [],
       error: '--turns must be a positive integer'
     })
     expect(parseDogfoodCliArgs(['--timeout-ms', '--open', 'forum-1'])).toEqual({
       openDiscord: false,
+      attachOnly: false,
       positional: [],
       error: '--timeout-ms requires a positive integer'
     })

@@ -177,6 +177,12 @@ change that count. Pass `--timeout-ms <ms>` to extend a long manual session
 without editing env. Use the printed Discord URL as the window to keep chatting
 with Warrunner. For the tightest local loop, run
 `pnpm --filter discordbot dogfood:session -- --open --turns 12 --timeout-ms 600000 <channel-or-forum-id>`.
+To reattach to an already-open forum thread or home channel without posting a
+new setup prompt, pass `--attach`:
+
+```bash
+pnpm --filter discordbot dogfood:session -- --attach --open --turns 12 --timeout-ms 600000 <thread-or-home-channel-id>
+```
 
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
