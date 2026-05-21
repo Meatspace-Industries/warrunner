@@ -10,7 +10,7 @@ import {
   runLiveDogfood,
   runLiveDogfoodSession
 } from './live'
-import { writeDogfoodTranscript } from './transcript'
+import { prepareDogfoodTranscriptDir, writeDogfoodTranscript } from './transcript'
 
 setDefaultTimeout(10_000)
 
@@ -197,6 +197,23 @@ afterAll(() => {
 })
 
 describe('live dogfood chat loop', () => {
+  it('preflights transcript directory writability before live dogfood starts', async () => {
+    const transcriptDir = await mkdtemp(join(tmpdir(), 'warrunner-dogfood-preflight-'))
+    try {
+      const prepared = await prepareDogfoodTranscriptDir(transcriptDir)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok || 'skipped' in prepared) throw new Error('transcript dir was not prepared')
+      expect(prepared.path).toBe(transcriptDir)
+
+      const failed = await prepareDogfoodTranscriptDir('/dev/null/warrunner')
+      expect(failed.ok).toBe(false)
+      if (failed.ok) throw new Error('expected /dev/null/warrunner to fail')
+      expect(failed.error).toContain('not a directory')
+    } finally {
+      await rm(transcriptDir, { recursive: true, force: true })
+    }
+  })
+
   it('creates a Discord forum thread and waits for a real Gateway message through final delivery', async () => {
     const progress: string[] = []
     const result = await runLiveDogfood(testConfig(), {

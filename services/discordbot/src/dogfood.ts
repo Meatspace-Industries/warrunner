@@ -13,7 +13,7 @@ import {
 } from './dogfood/live'
 import { liveProgressReporter, parseDogfoodCliArgs } from './dogfood/operator'
 import { formatSmokePost, runSmokePost } from './dogfood/smoke'
-import { writeDogfoodTranscript } from './dogfood/transcript'
+import { prepareDogfoodTranscriptDir, writeDogfoodTranscript } from './dogfood/transcript'
 
 type Check = {
   name: string
@@ -110,6 +110,8 @@ if (import.meta.main) {
     process.exit(result.ok ? 0 : 1)
   }
   if (command === 'live') {
+    const transcriptDir = globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
+    await requireDogfoodTranscriptDir(transcriptDir)
     const config = loadConfig(env)
     const preflight = await runPreflight(config)
     console.log(formatPreflight(preflight))
@@ -130,11 +132,13 @@ if (import.meta.main) {
     const transcriptOk = await reportDogfoodTranscript(
       'live',
       result,
-      globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
+      transcriptDir
     )
     process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }
   if (command === 'session') {
+    const transcriptDir = globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
+    await requireDogfoodTranscriptDir(transcriptDir)
     const config = loadConfig(env)
     const preflight = await runPreflight(config)
     console.log(formatPreflight(preflight))
@@ -156,7 +160,7 @@ if (import.meta.main) {
     const transcriptOk = await reportDogfoodTranscript(
       'session',
       result,
-      globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
+      transcriptDir
     )
     process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }
@@ -221,6 +225,13 @@ async function reportDogfoodTranscript(
     console.error(`FAIL dogfood transcript: ${transcript.error}`)
     return false
   }
+}
+
+async function requireDogfoodTranscriptDir(transcriptDir: string | undefined): Promise<void> {
+  const prepared = await prepareDogfoodTranscriptDir(transcriptDir)
+  if (prepared.ok) return
+  console.error(`FAIL dogfood transcript dir: ${prepared.error}`)
+  process.exit(1)
 }
 
 async function checkDiscordIdentity(

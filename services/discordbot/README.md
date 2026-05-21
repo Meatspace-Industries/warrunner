@@ -158,7 +158,8 @@ write a JSON transcript containing the target URL, accepted Discord message ids,
 handoff statuses, and Discord reply ids/content. The Meatspace host wrapper
 defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`. If a
 transcript directory is configured, live/session dogfood exits nonzero when the
-transcript cannot be written.
+transcript cannot be written. Both the host wrapper and the direct dogfood CLI
+validate the transcript directory before Discord preflight or live chat begins.
 
 For iterative dogfooding from the Discord window, run a short live session:
 

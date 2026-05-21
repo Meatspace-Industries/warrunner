@@ -85,6 +85,24 @@ if grep -q "dogfood:session" <<<"$host_transcript_output"; then
   echo "Transcript dir validation should fail before pnpm starts dogfood:session." >&2
   exit 1
 fi
+echo
+echo "==> pnpm --filter discordbot dogfood:session -- --dogfood-env-file=.env.example --transcript-dir=/dev/null/warrunner --no-open"
+if direct_transcript_output="$(
+  pnpm --filter discordbot dogfood:session -- \
+    --dogfood-env-file=.env.example \
+    --transcript-dir=/dev/null/warrunner \
+    --no-open 2>&1
+)"; then
+  echo "$direct_transcript_output"
+  echo "Expected direct dogfood session to fail before preflight with an unwritable transcript dir." >&2
+  exit 1
+fi
+echo "$direct_transcript_output"
+grep -q "FAIL dogfood transcript dir:" <<<"$direct_transcript_output"
+if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$direct_transcript_output"; then
+  echo "Direct transcript dir validation should fail before dogfood preflight." >&2
+  exit 1
+fi
 run uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py
 run helm repo add 1password https://1password.github.io/connect-helm-charts --force-update
 run helm dependency build contrib/chart

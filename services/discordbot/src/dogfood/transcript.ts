@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { DiscordChannel } from '../discord/types'
 import type { LiveDogfoodResult, LiveDogfoodSessionResult } from './live'
@@ -10,6 +11,30 @@ export type WriteDogfoodTranscriptResult =
   | { ok: true; path: string }
   | { ok: false; error: string }
   | { ok: true; skipped: true }
+
+export type PrepareDogfoodTranscriptDirResult =
+  | { ok: true; path: string }
+  | { ok: false; error: string }
+  | { ok: true; skipped: true }
+
+export async function prepareDogfoodTranscriptDir(
+  transcriptDir?: string
+): Promise<PrepareDogfoodTranscriptDirResult> {
+  const dir = transcriptDir?.trim()
+  if (!dir) return { ok: true, skipped: true }
+
+  const path = resolve(dir)
+  const probe = resolve(path, `.warrunner-transcript-probe-${process.pid}-${randomUUID()}`)
+  try {
+    await mkdir(path, { recursive: true, mode: 0o700 })
+    await writeFile(probe, 'ok\n', { encoding: 'utf8', mode: 0o600 })
+    await rm(probe, { force: true })
+    return { ok: true, path }
+  } catch (error) {
+    await rm(probe, { force: true }).catch(() => {})
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
 
 export async function writeDogfoodTranscript(opts: {
   command: TranscriptCommand
