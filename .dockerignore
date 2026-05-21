@@ -5,6 +5,7 @@
 .venv
 
 # Node
+services/discordbot/node_modules
 services/slackbot/node_modules
 
 # Sandbox cached repos (4GB+)
