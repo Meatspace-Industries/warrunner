@@ -171,8 +171,8 @@ Discord reply id/content/URL, including chunked final answers. Live dogfood uses
 the execution id when available so unrelated same-channel final deliveries do
 not satisfy the wrong turn. If a long-running Discordbot process claims and
 posts the final delivery first, the live dogfood waiter also polls the target
-channel and counts a bot-authored Discord reply posted after the accepted user
-message. Formatted output and transcripts mark each reply source as
+channel and counts a bot-authored Discord reply only when it references the
+accepted user message. Formatted output and transcripts mark each reply source as
 `final_delivery` or `channel_history` so operator runs show whether the CLI or
 an already-running Discordbot observed the answer. The Meatspace host wrapper
 defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`. If a

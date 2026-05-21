@@ -747,20 +747,32 @@ async function observeBotReplyFromDiscord(opts: {
     })
     .catch(() => [])
   const locallyDeliveredIds = new Set(opts.discord.observedReplies.map(reply => reply.message.id))
-  const replies = messages
+  const candidates = messages
     .filter(message => message.channel_id === opts.channelId)
     .filter(message => message.author?.id === botUserId)
     .filter(message => !locallyDeliveredIds.has(message.id))
     .filter(message => String(message.content ?? '').trim())
-    .map(message => ({
-      channelId: opts.channelId,
-      content: String(message.content ?? ''),
-      message
-    }))
+  const firstReplyIndex = candidates.findIndex(message =>
+    referencesDiscordMessage(message, opts.afterMessageId)
+  )
+  if (firstReplyIndex < 0) return undefined
+
+  const replies = candidates.slice(firstReplyIndex).map(message => ({
+    channelId: opts.channelId,
+    content: String(message.content ?? ''),
+    message
+  }))
 
   const first = replies[0]
   if (!first) return undefined
   return { ...first, messages: replies, source: 'channel_history' }
+}
+
+function referencesDiscordMessage(message: DiscordMessage, messageId: string): boolean {
+  return (
+    message.message_reference?.message_id === messageId ||
+    message.referenced_message?.id === messageId
+  )
 }
 
 function handoffExecutionId(result: CentaurHandoffResult): string | undefined {
