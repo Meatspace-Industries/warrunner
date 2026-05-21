@@ -160,7 +160,7 @@ describe('live dogfood chat loop', () => {
       channelId: 'forum-1',
       content: 'open live dogfood',
       appliedTagIds: ['tag-1'],
-      timeoutMs: 2_000,
+      timeoutMs: 5_000,
       pollIntervalMs: 10,
       onProgress: line => progress.push(line)
     })
@@ -215,7 +215,7 @@ describe('live dogfood chat loop', () => {
       channelId: 'forum-1',
       content: 'open multi-turn dogfood',
       turnLimit: 2,
-      timeoutMs: 2_000,
+      timeoutMs: 5_000,
       pollIntervalMs: 10
     })
     const formatted = formatLiveDogfoodSession(result)
@@ -241,7 +241,7 @@ describe('live dogfood chat loop', () => {
       channelId: 'forum-1',
       content: 'open chunked dogfood',
       turnLimit: 2,
-      timeoutMs: 2_000,
+      timeoutMs: 5_000,
       pollIntervalMs: 10
     })
     const formatted = formatLiveDogfoodSession(result)

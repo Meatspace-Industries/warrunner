@@ -55,6 +55,7 @@ run pnpm --filter discordbot test
 run pnpm --filter discordbot check:types
 run pnpm --filter discordbot dogfood:emulated
 run uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py
+run helm repo add 1password https://1password.github.io/connect-helm-charts --force-update
 run helm dependency build contrib/chart
 run helm lint contrib/chart -f meatspace/infra/helm/values.warrunner.yaml
 
