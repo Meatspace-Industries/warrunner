@@ -158,16 +158,16 @@ Pass `--open`, or set `WARRUNNER_DOGFOOD_OPEN_DISCORD=true`, to open the printed
 Discord URL automatically when the live target is ready.
 Pass `--transcript-dir <dir>`, or set `WARRUNNER_DOGFOOD_TRANSCRIPT_DIR`, to
 write a JSON transcript containing the target URL, accepted Discord message ids,
-workflow execution ids, handoff statuses, and every Discord reply id/content,
-including chunked final answers. Live dogfood uses the execution id when
-available so unrelated same-channel final deliveries do not satisfy the wrong
-turn. If a long-running Discordbot process claims and posts the final delivery
-first, the live dogfood waiter also polls the target channel and counts a
-bot-authored Discord reply posted after the accepted user message. Formatted
-output and transcripts mark each reply source as `final_delivery` or
-`channel_history` so operator runs show whether the CLI or an already-running
-Discordbot observed the answer. The Meatspace host wrapper defaults this to
-`/var/lib/meepo/warrunner/dogfood-transcripts`. If a
+accepted-message URLs, workflow execution ids, handoff statuses, and every
+Discord reply id/content/URL, including chunked final answers. Live dogfood uses
+the execution id when available so unrelated same-channel final deliveries do
+not satisfy the wrong turn. If a long-running Discordbot process claims and
+posts the final delivery first, the live dogfood waiter also polls the target
+channel and counts a bot-authored Discord reply posted after the accepted user
+message. Formatted output and transcripts mark each reply source as
+`final_delivery` or `channel_history` so operator runs show whether the CLI or
+an already-running Discordbot observed the answer. The Meatspace host wrapper
+defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`. If a
 transcript directory is configured, live/session dogfood exits nonzero when the
 transcript cannot be written. Both the host wrapper and the direct dogfood CLI
 validate the transcript directory before Discord preflight or live chat begins.
@@ -182,8 +182,8 @@ pnpm --filter discordbot dogfood:session -- <channel-or-forum-id>
 ```
 
 This uses the same setup as `dogfood:live`, but waits for multiple Discord
-messages and prints each accepted message plus the Discord reply id. It defaults
-to three turns; pass `--turns <n>` or set `WARRUNNER_DOGFOOD_SESSION_TURNS` to
+messages and prints each accepted message plus Discord request/reply deep links.
+It defaults to three turns; pass `--turns <n>` or set `WARRUNNER_DOGFOOD_SESSION_TURNS` to
 change that count. Pass `--until-timeout` to keep accepting turns until the
 configured timeout expires after at least one completed turn. Pass
 `--timeout-ms <ms>` to extend a long manual session without editing env. Use the

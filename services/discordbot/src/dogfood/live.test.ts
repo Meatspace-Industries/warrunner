@@ -349,7 +349,13 @@ describe('live dogfood chat loop', () => {
     expect(progress.some(line => line.includes('PASS live Discord message accepted'))).toBe(true)
     expect(formatted).toContain('PASS live Discord chat loop completed')
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
+    expect(formatted).toContain(
+      'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
+    )
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
+    expect(formatted).toContain(
+      'PASS Discord reply URL: https://discord.com/channels/guild-1/live-thread-1/reply-msg-1'
+    )
     expect(formatted).toContain('PASS Discord reply source: final_delivery')
   })
 
@@ -424,7 +430,13 @@ describe('live dogfood chat loop', () => {
     expect(progress.some(line => line.includes('https://discord.com/channels/guild-1/home-1'))).toBe(true)
     expect(formatted).toContain('PASS live Discord chat loop completed')
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/home-1')
+    expect(formatted).toContain(
+      'PASS Discord message URL: https://discord.com/channels/guild-1/home-1/live-msg-1'
+    )
     expect(formatted).toContain('PASS Discord reply posted: home-msg-2')
+    expect(formatted).toContain(
+      'PASS Discord reply URL: https://discord.com/channels/guild-1/home-1/home-msg-2'
+    )
   })
 
   it('keeps a live session open for multiple Discord turns', async () => {
@@ -456,6 +468,9 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS turns completed: 2')
     expect(formatted).toContain('PASS stop reason: turn_limit')
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2 [exec-2] via final_delivery')
+    expect(formatted).toContain(
+      'https://discord.com/channels/guild-1/live-thread-1/live-msg-2 -> https://discord.com/channels/guild-1/live-thread-1/reply-msg-2'
+    )
   })
 
   it('keeps an open-ended live session running until the timeout expires', async () => {
@@ -625,6 +640,9 @@ describe('live dogfood chat loop', () => {
       expect(formatted).toContain('timed out waiting for a Discord final-delivery reply')
       expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
       expect(formatted).toContain('PASS live Discord message accepted: discord:guild-1:live-thread-1:live-msg-1')
+      expect(formatted).toContain(
+        'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
+      )
       expect(formatted).toContain('PASS workflow handoff: 200')
       expect(formatted).toContain('PASS workflow execution: exec-1')
       expect(formatted).not.toContain('PASS Discord reply posted')
@@ -643,6 +661,7 @@ describe('live dogfood chat loop', () => {
         observed_message_id: 'discord:guild-1:live-thread-1:live-msg-1',
         failed_turn: {
           message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+          message_url: 'https://discord.com/channels/guild-1/live-thread-1/live-msg-1',
           execution_id: 'exec-1',
           text: 'stale-only session turn',
           handoff: { ok: true, status: 200 }
@@ -690,25 +709,29 @@ describe('live dogfood chat loop', () => {
           {
             index: 1,
             message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+            message_url: 'https://discord.com/channels/guild-1/live-thread-1/live-msg-1',
             execution_id: 'exec-1',
             text: 'first transcript turn',
             handoff: { ok: true, status: 200 },
             reply: {
               source: 'final_delivery',
               channel_id: 'live-thread-1',
-              message_id: 'reply-msg-1'
+              message_id: 'reply-msg-1',
+              url: 'https://discord.com/channels/guild-1/live-thread-1/reply-msg-1'
             }
           },
           {
             index: 2,
             message_id: 'discord:guild-1:live-thread-1:live-msg-2',
+            message_url: 'https://discord.com/channels/guild-1/live-thread-1/live-msg-2',
             execution_id: 'exec-2',
             text: 'second transcript turn',
             handoff: { ok: true, status: 200 },
             reply: {
               source: 'final_delivery',
               channel_id: 'live-thread-1',
-              message_id: 'reply-msg-2'
+              message_id: 'reply-msg-2',
+              url: 'https://discord.com/channels/guild-1/live-thread-1/reply-msg-2'
             }
           }
         ]
@@ -767,11 +790,13 @@ describe('live dogfood chat loop', () => {
         {
           channel_id: 'live-thread-1',
           message_id: 'reply-msg-1',
+          url: 'https://discord.com/channels/guild-1/live-thread-1/reply-msg-1',
           content: discordPosts[0]?.body.content
         },
         {
           channel_id: 'live-thread-1',
           message_id: 'reply-msg-2',
+          url: 'https://discord.com/channels/guild-1/live-thread-1/reply-msg-2',
           content: discordPosts[1]?.body.content
         }
       ])

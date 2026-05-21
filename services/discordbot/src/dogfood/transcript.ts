@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { DiscordChannel } from '../discord/types'
-import type { LiveDogfoodResult, LiveDogfoodSessionResult } from './live'
+import {
+  acceptedDiscordMessageUrl,
+  replyDiscordMessageUrl,
+  type LiveDogfoodResult,
+  type LiveDogfoodSessionResult
+} from './live'
 
 type TranscriptCommand = 'live' | 'session'
 type TranscriptResult = LiveDogfoodResult | LiveDogfoodSessionResult
@@ -82,66 +87,78 @@ function toTranscript(
     completed_at: completedAt.toISOString(),
     ...('stopReason' in result ? { stop_reason: result.stopReason } : {}),
     ...(result.target ? { target: targetSummary(result.target) } : {}),
-    turns: turns.map((turn, index) => ({
-      index: index + 1,
-      message_id: turn.observedEvent.message_id,
-      discord_message_id: turn.observedEvent.discord.message_id,
-      thread_key: turn.observedEvent.thread_key,
-      guild_id: turn.observedEvent.guild_id,
-      channel_id: turn.observedEvent.channel_id,
-      ...(turn.observedEvent.parent_channel_id
-        ? { parent_channel_id: turn.observedEvent.parent_channel_id }
-        : {}),
-      user_id: turn.observedEvent.user_id,
-      text: turn.observedEvent.parts.map(part => part.text).join('\n'),
-      ...(turn.executionId ? { execution_id: turn.executionId } : {}),
-      handoff: {
-        ok: turn.handoff.ok,
-        status: turn.handoff.status
-      },
-      reply: {
-        source: turn.reply.source,
-        channel_id: turn.reply.channelId,
-        message_id: turn.reply.message.id,
-        content: turn.reply.content,
-        full_content: turn.reply.messages.map(message => message.content).join('\n'),
-        messages: turn.reply.messages.map(message => ({
-          channel_id: message.channelId,
-          message_id: message.message.id,
-          content: message.content
-        }))
+    turns: turns.map((turn, index) => {
+      const messageUrl = acceptedDiscordMessageUrl(turn.observedEvent)
+      const replyUrl = replyDiscordMessageUrl(turn.reply, turn.observedEvent.guild_id)
+      return {
+        index: index + 1,
+        message_id: turn.observedEvent.message_id,
+        discord_message_id: turn.observedEvent.discord.message_id,
+        ...(messageUrl ? { message_url: messageUrl } : {}),
+        thread_key: turn.observedEvent.thread_key,
+        guild_id: turn.observedEvent.guild_id,
+        channel_id: turn.observedEvent.channel_id,
+        ...(turn.observedEvent.parent_channel_id
+          ? { parent_channel_id: turn.observedEvent.parent_channel_id }
+          : {}),
+        user_id: turn.observedEvent.user_id,
+        text: turn.observedEvent.parts.map(part => part.text).join('\n'),
+        ...(turn.executionId ? { execution_id: turn.executionId } : {}),
+        handoff: {
+          ok: turn.handoff.ok,
+          status: turn.handoff.status
+        },
+        reply: {
+          source: turn.reply.source,
+          channel_id: turn.reply.channelId,
+          message_id: turn.reply.message.id,
+          ...(replyUrl ? { url: replyUrl } : {}),
+          content: turn.reply.content,
+          full_content: turn.reply.messages.map(message => message.content).join('\n'),
+          messages: turn.reply.messages.map(message => {
+            const url = replyDiscordMessageUrl(message, turn.observedEvent.guild_id)
+            return {
+              channel_id: message.channelId,
+              message_id: message.message.id,
+              ...(url ? { url } : {}),
+              content: message.content
+            }
+          })
+        }
       }
-    })),
+    }),
     ...(!result.ok
       ? {
           error: result.error,
           ...(result.hint ? { hint: result.hint } : {}),
           ...(result.observedEvent ? { observed_message_id: result.observedEvent.message_id } : {}),
-          ...(result.observedEvent
-            ? {
-                failed_turn: {
-                  message_id: result.observedEvent.message_id,
-                  discord_message_id: result.observedEvent.discord.message_id,
-                  thread_key: result.observedEvent.thread_key,
-                  guild_id: result.observedEvent.guild_id,
-                  channel_id: result.observedEvent.channel_id,
-                  ...(result.observedEvent.parent_channel_id
-                    ? { parent_channel_id: result.observedEvent.parent_channel_id }
-                    : {}),
-                  user_id: result.observedEvent.user_id,
-                  text: result.observedEvent.parts.map(part => part.text).join('\n'),
-                  ...(result.executionId ? { execution_id: result.executionId } : {}),
-                  ...(result.handoff
-                    ? {
-                        handoff: {
-                          ok: result.handoff.ok,
-                          status: result.handoff.status
-                        }
-                      }
-                    : {})
-                }
-              }
-            : {})
+          ...(result.observedEvent ? { failed_turn: failedTurnSummary(result) } : {})
+        }
+      : {})
+  }
+}
+
+function failedTurnSummary(result: Extract<TranscriptResult, { ok: false }>): Record<string, unknown> {
+  const event = result.observedEvent
+  if (!event) return {}
+  const messageUrl = acceptedDiscordMessageUrl(event)
+  return {
+    message_id: event.message_id,
+    discord_message_id: event.discord.message_id,
+    ...(messageUrl ? { message_url: messageUrl } : {}),
+    thread_key: event.thread_key,
+    guild_id: event.guild_id,
+    channel_id: event.channel_id,
+    ...(event.parent_channel_id ? { parent_channel_id: event.parent_channel_id } : {}),
+    user_id: event.user_id,
+    text: event.parts.map(part => part.text).join('\n'),
+    ...(result.executionId ? { execution_id: result.executionId } : {}),
+    ...(result.handoff
+      ? {
+          handoff: {
+            ok: result.handoff.ok,
+            status: result.handoff.status
+          }
         }
       : {})
   }

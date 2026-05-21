@@ -4,7 +4,12 @@ import { homeChannelIds, loadConfig, type AppConfig } from '../config'
 import { DiscordChannelResolver, DiscordClient } from '../discord/client'
 import { startDiscordGateway, type DiscordGatewayHandle } from '../discord/gateway'
 import { createDiscordMessageProcessor, type DiscordHandoff } from '../discord/process'
-import type { DiscordChannel, DiscordMessage, NormalizedDiscordEvent } from '../discord/types'
+import type {
+  DiscordChannel,
+  DiscordCreateMessageBody,
+  DiscordMessage,
+  NormalizedDiscordEvent
+} from '../discord/types'
 import { runSmokePost, type SmokePostResult } from './smoke'
 
 type LiveDogfoodOptions = {
@@ -33,7 +38,7 @@ type LiveTarget = {
   setupMessage?: DiscordMessage
 }
 
-type ObservedReplyMessage = {
+export type ObservedReplyMessage = {
   channelId: string
   content: string
   message: DiscordMessage
@@ -302,7 +307,11 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
     const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
     const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
     const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
-    return `FAIL live Discord chat loop: ${result.error}${target}${event}${handoff}${execution}${hint}`
+    const eventUrl = result.observedEvent
+      ? acceptedDiscordMessageUrl(result.observedEvent)
+      : undefined
+    const eventUrlLine = eventUrl ? `\nPASS Discord message URL: ${eventUrl}` : ''
+    return `FAIL live Discord chat loop: ${result.error}${target}${event}${eventUrlLine}${handoff}${execution}${hint}`
   }
 
   const target = result.target.createdThread
@@ -315,7 +324,9 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
     `PASS workflow handoff: ${result.handoff.status}`,
     ...(result.executionId ? [`PASS workflow execution: ${result.executionId}`] : []),
     `PASS normalized user text: ${result.observedEvent.parts[0]?.text ?? '(missing)'}`,
+    ...lineIf('PASS Discord message URL', acceptedDiscordMessageUrl(result.observedEvent)),
     `PASS Discord reply posted: ${result.reply.message.id}`,
+    ...lineIf('PASS Discord reply URL', replyDiscordMessageUrl(result.reply, result.observedEvent.guild_id)),
     ...(result.reply.messages.length > 1
       ? [`PASS Discord reply messages: ${result.reply.messages.map(reply => reply.message.id).join(', ')}`]
       : []),
@@ -332,7 +343,11 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
     const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
     const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
     const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
-    return `FAIL live Discord dogfood session: ${result.error}${target}${completed}${event}${handoff}${execution}${hint}`
+    const eventUrl = result.observedEvent
+      ? acceptedDiscordMessageUrl(result.observedEvent)
+      : undefined
+    const eventUrlLine = eventUrl ? `\nPASS Discord message URL: ${eventUrl}` : ''
+    return `FAIL live Discord dogfood session: ${result.error}${target}${completed}${event}${eventUrlLine}${handoff}${execution}${hint}`
   }
   const target = result.target.createdThread
     ? `${channelLabel(result.target.channel)} -> ${result.target.createdThread.name ?? result.target.createdThread.id} (${result.target.conversationChannelId})`
@@ -348,7 +363,10 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
       const messageCount =
         turn.reply.messages.length > 1 ? ` (${turn.reply.messages.length} Discord messages)` : ''
       const execution = turn.executionId ? ` [${turn.executionId}]` : ''
-      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}${execution} via ${turn.reply.source}`
+      const requestUrl = acceptedDiscordMessageUrl(turn.observedEvent)
+      const replyUrl = replyDiscordMessageUrl(turn.reply, turn.observedEvent.guild_id)
+      const urls = requestUrl && replyUrl ? ` (${requestUrl} -> ${replyUrl})` : ''
+      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}${execution} via ${turn.reply.source}${urls}`
     })
   ].join('\n')
 }
@@ -436,7 +454,7 @@ class ObservingDiscordClient extends DiscordClient {
 
   override async createMessage(
     channelId: string,
-    body: { content: string; allowed_mentions?: { parse: string[] } }
+    body: DiscordCreateMessageBody
   ): Promise<DiscordMessage> {
     const message = await super.createMessage(channelId, body)
     if (this.replyObserverArmed) {
@@ -691,6 +709,34 @@ function discordChannelUrlForChannel(
 ): string | undefined {
   const guildId = channel.guild_id ?? config.DISCORD_GUILD_ID
   return guildId ? `https://discord.com/channels/${guildId}/${channelId}` : undefined
+}
+
+export function acceptedDiscordMessageUrl(event: NormalizedDiscordEvent): string | undefined {
+  return discordMessageUrl(event.guild_id, event.channel_id, event.discord.message_id)
+}
+
+export function replyDiscordMessageUrl(
+  reply: ObservedReplyMessage,
+  fallbackGuildId?: string
+): string | undefined {
+  return discordMessageUrl(
+    reply.message.guild_id ?? fallbackGuildId,
+    reply.channelId,
+    reply.message.id
+  )
+}
+
+export function discordMessageUrl(
+  guildId: string | undefined,
+  channelId: string | undefined,
+  messageId: string | undefined
+): string | undefined {
+  if (!guildId || !channelId || !messageId) return undefined
+  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`
+}
+
+function lineIf(label: string, value: string | undefined): string[] {
+  return value ? [`${label}: ${value}`] : []
 }
 
 function isForumChannel(channel: DiscordChannel): boolean {
