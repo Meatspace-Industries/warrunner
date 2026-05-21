@@ -62,6 +62,12 @@ type AcceptedLiveDogfoodTurn = {
   executionId?: string
 }
 
+type AcceptedLiveDiscordMessage = {
+  event: NormalizedDiscordEvent
+  handoff: CentaurHandoffResult
+  executionId?: string
+}
+
 export type LiveDogfoodResult =
   | {
       ok: true
@@ -199,7 +205,9 @@ export async function runLiveDogfoodSession(
         tracker.accept(value)
       }
     )
-    gatewayHandle = startLiveGateway(config, discord, channels, handoff)
+    const processMessage = createDiscordMessageProcessor({ config, discord, channels, handoff })
+    const processLiveMessage = dedupeDiscordMessageProcessor(processMessage)
+    gatewayHandle = startLiveGateway(config, discord, channels, processLiveMessage)
     if (!gatewayHandle) {
       return {
         ok: false,
@@ -237,6 +245,8 @@ export async function runLiveDogfoodSession(
       }
       target = targetFromSmoke(config, requestedChannelId, setup)
     }
+    const historyIntakeSeenMessageIds = new Set<string>()
+    let historyCursor = target.setupMessage?.id ?? (await latestMessageId(discord, target.conversationChannelId))
     opts.onProgress?.(formatLiveTarget(target, botUser.id, timeoutMs))
 
     discord.armReplyObserver()
@@ -244,9 +254,22 @@ export async function runLiveDogfoodSession(
     let replyCursor = 0
     while (untilTimeout || turns.length < turnLimit) {
       const nextMessageTimeout = `timed out waiting for Discord message ${turns.length + 1} in ${target.conversationChannelId}`
-      let accepted: Awaited<ReturnType<LiveTurnTracker['next']>>
+      let accepted: AcceptedLiveDiscordMessage
       try {
-        accepted = await tracker.next(turns.length, remainingTimeout(timeoutMs, startedAt), nextMessageTimeout)
+        accepted = await waitForAcceptedTurn({
+          tracker,
+          index: turns.length,
+          discord,
+          channelId: target.conversationChannelId,
+          afterMessageId: historyCursor,
+          processMessage: processLiveMessage,
+          seenMessageIds: historyIntakeSeenMessageIds,
+          timeoutMs: remainingTimeout(timeoutMs, startedAt),
+          pollIntervalMs,
+          timeoutMessage: nextMessageTimeout,
+          onProgress: opts.onProgress
+        })
+        historyCursor = accepted.event.discord.message_id
       } catch (error) {
         if (untilTimeout && turns.length > 0 && errorMessage(error) === nextMessageTimeout) {
           opts.onProgress?.(`PASS live Discord session idle timeout after ${turns.length} turns`)
@@ -404,43 +427,23 @@ class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
 }
 
 class LiveTurnTracker {
-  readonly accepted: Array<{
-    event: NormalizedDiscordEvent
-    handoff: CentaurHandoffResult
-    executionId?: string
-  }> = []
-  readonly waiters: Array<() => void> = []
+  readonly accepted: AcceptedLiveDiscordMessage[] = []
+  readonly acceptedMessageIds = new Set<string>()
+  readonly acceptedDiscordMessageIds = new Set<string>()
 
-  accept(value: {
-    event: NormalizedDiscordEvent
-    handoff: CentaurHandoffResult
-    executionId?: string
-  }): void {
+  accept(value: AcceptedLiveDiscordMessage): void {
+    if (this.acceptedMessageIds.has(value.event.message_id)) return
+    this.acceptedMessageIds.add(value.event.message_id)
+    this.acceptedDiscordMessageIds.add(value.event.discord.message_id)
     this.accepted.push(value)
-    const waiters = this.waiters.splice(0)
-    for (const resolve of waiters) resolve()
   }
 
-  async next(
-    index: number,
-    timeoutMs: number,
-    timeoutMessage: string
-  ): Promise<{
-    event: NormalizedDiscordEvent
-    handoff: CentaurHandoffResult
-    executionId?: string
-  }> {
-    if (this.accepted[index]) return this.accepted[index]
-    await withTimeout(
-      new Promise<void>(resolve => {
-        this.waiters.push(resolve)
-      }),
-      timeoutMs,
-      timeoutMessage
-    )
-    const accepted = this.accepted[index]
-    if (!accepted) throw new Error(timeoutMessage)
-    return accepted
+  hasDiscordMessageId(messageId: string): boolean {
+    return this.acceptedDiscordMessageIds.has(messageId)
+  }
+
+  peek(index: number): AcceptedLiveDiscordMessage | undefined {
+    return this.accepted[index]
   }
 }
 
@@ -472,14 +475,101 @@ function startLiveGateway(
   config: AppConfig,
   discord: DiscordClient,
   channels: DiscordChannelResolver,
-  handoff: DiscordHandoff
+  processMessage: (message: DiscordMessage) => Promise<void>
 ): DiscordGatewayHandle | null {
   return startDiscordGateway({
     config,
     client: discord,
     channelResolver: channels,
-    onMessage: createDiscordMessageProcessor({ config, discord, channels, handoff })
+    onMessage: processMessage
   })
+}
+
+function dedupeDiscordMessageProcessor(
+  processMessage: (message: DiscordMessage) => Promise<void>
+): (message: DiscordMessage) => Promise<void> {
+  const seenMessageIds = new Set<string>()
+  return async message => {
+    if (!message.id) return
+    if (seenMessageIds.has(message.id)) return
+    seenMessageIds.add(message.id)
+    await processMessage(message)
+  }
+}
+
+async function waitForAcceptedTurn(opts: {
+  tracker: LiveTurnTracker
+  index: number
+  discord: ObservingDiscordClient
+  channelId: string
+  afterMessageId?: string
+  processMessage: (message: DiscordMessage) => Promise<void>
+  seenMessageIds: Set<string>
+  timeoutMs: number
+  pollIntervalMs: number
+  timeoutMessage: string
+  onProgress?: (line: string) => void
+}): Promise<AcceptedLiveDiscordMessage> {
+  const started = Date.now()
+  let cursor = opts.afterMessageId
+  while (Date.now() - started < opts.timeoutMs) {
+    const accepted = opts.tracker.peek(opts.index)
+    if (accepted) return accepted
+
+    const polled = await processChannelHistoryIntake({
+      discord: opts.discord,
+      channelId: opts.channelId,
+      afterMessageId: cursor,
+      processMessage: opts.processMessage,
+      seenMessageIds: opts.seenMessageIds,
+      tracker: opts.tracker,
+      onProgress: opts.onProgress
+    })
+    cursor = polled.afterMessageId
+
+    const acceptedAfterPoll = opts.tracker.peek(opts.index)
+    if (acceptedAfterPoll) return acceptedAfterPoll
+
+    await sleep(Math.min(opts.pollIntervalMs, remainingTimeout(opts.timeoutMs, started)))
+  }
+  throw new Error(opts.timeoutMessage)
+}
+
+async function processChannelHistoryIntake(opts: {
+  discord: ObservingDiscordClient
+  channelId: string
+  afterMessageId?: string
+  processMessage: (message: DiscordMessage) => Promise<void>
+  seenMessageIds: Set<string>
+  tracker: LiveTurnTracker
+  onProgress?: (line: string) => void
+}): Promise<{ afterMessageId?: string }> {
+  const messages = await opts.discord
+    .fetchMessages({
+      channelId: opts.channelId,
+      after: opts.afterMessageId,
+      limit: 25
+    })
+    .catch(() => [])
+  let cursor = opts.afterMessageId
+  for (const message of messages) {
+    if (message.channel_id !== opts.channelId) continue
+    cursor = message.id || cursor
+    if (!message.id || message.author?.bot || message.webhook_id) continue
+    if (opts.seenMessageIds.has(message.id) || opts.tracker.hasDiscordMessageId(message.id)) continue
+    opts.seenMessageIds.add(message.id)
+    opts.onProgress?.(`PASS live Discord history intake: ${message.id}`)
+    await opts.processMessage(message)
+  }
+  return { ...(cursor ? { afterMessageId: cursor } : {}) }
+}
+
+async function latestMessageId(
+  discord: ObservingDiscordClient,
+  channelId: string
+): Promise<string | undefined> {
+  const messages = await discord.fetchMessages({ channelId, limit: 1 }).catch(() => [])
+  return messages.at(-1)?.id
 }
 
 async function waitForReply(opts: {
@@ -745,20 +835,6 @@ function isForumChannel(channel: DiscordChannel): boolean {
 
 function isThreadChannel(channel: DiscordChannel): boolean {
   return channel.type === 10 || channel.type === 11 || channel.type === 12
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs)
-      })
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
 }
 
 function remainingTimeout(timeoutMs: number, startedAt: number): number {

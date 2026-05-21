@@ -171,6 +171,10 @@ defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`. If a
 transcript directory is configured, live/session dogfood exits nonzero when the
 transcript cannot be written. Both the host wrapper and the direct dogfood CLI
 validate the transcript directory before Discord preflight or live chat begins.
+During live/session waits, the CLI also polls fresh target-channel history and
+feeds missed user messages through the same Discord normalization and handoff
+path as Gateway events, so a dropped Gateway dispatch does not strand a manual
+dogfood session.
 When a live run accepts a Discord message but times out before a matching reply,
 the failed transcript records the accepted message, handoff status, and
 execution id under `failed_turn`.

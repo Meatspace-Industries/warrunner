@@ -27,12 +27,15 @@ const delivered: CapturedRequest[] = []
 const pendingDeliveries: any[] = []
 const createdDiscordMessages: any[] = []
 const externalDiscordReplies: any[] = []
+const historyDiscordMessages: any[] = []
 
 let activeGateway: any = null
 let liveTargetReady = false
 let liveConversationChannelId = 'live-thread-1'
 let liveParentChannelId: string | undefined = 'forum-1'
 let liveDispatchThreadCreate = true
+let liveDispatchGatewayMessages = true
+let liveMirrorGatewayMessagesToHistory = false
 let liveMessageCursor = 0
 let liveMessages: string[] = []
 let deliveryTexts: string[] = []
@@ -249,11 +252,14 @@ beforeEach(() => {
   pendingDeliveries.length = 0
   createdDiscordMessages.length = 0
   externalDiscordReplies.length = 0
+  historyDiscordMessages.length = 0
   activeGateway = null
   liveTargetReady = false
   liveConversationChannelId = 'live-thread-1'
   liveParentChannelId = 'forum-1'
   liveDispatchThreadCreate = true
+  liveDispatchGatewayMessages = true
+  liveMirrorGatewayMessagesToHistory = false
   liveMessageCursor = 0
   liveMessages = ['live dogfood from Discord']
   deliveryTexts = ['live dogfood final answer']
@@ -439,6 +445,55 @@ describe('live dogfood chat loop', () => {
     )
   })
 
+  it('recovers a fresh Discord message from channel history when Gateway intake misses it', async () => {
+    liveDispatchGatewayMessages = false
+    const progress: string[] = []
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open history fallback dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+      onProgress: line => {
+        progress.push(line)
+        if (line.includes('PASS live target ready')) {
+          historyDiscordMessages.push({
+            id: 'history-msg-1',
+            channel_id: 'live-thread-1',
+            guild_id: 'guild-1',
+            content: '<@bot-user> recovered from channel history',
+            author: { id: 'user-1' },
+            mentions: [{ id: 'bot-user' }],
+            attachments: []
+          })
+        }
+      }
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(true)
+    expect(progress).toContain('PASS live Discord history intake: history-msg-1')
+    expect(workflowRuns).toHaveLength(1)
+    expect(workflowRuns[0]?.body.input).toMatchObject({
+      thread_key: 'discord:guild-1:forum-1:live-thread-1',
+      message_id: 'discord:guild-1:live-thread-1:history-msg-1',
+      delivery: {
+        message_id: 'history-msg-1'
+      }
+    })
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('recovered from channel history')
+    expect(discordPosts).toHaveLength(1)
+    expect(discordPosts[0]?.body.message_reference).toMatchObject({
+      message_id: 'history-msg-1',
+      channel_id: 'live-thread-1',
+      guild_id: 'guild-1',
+      fail_if_not_exists: false
+    })
+    expect(formatted).toContain(
+      'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/history-msg-1'
+    )
+    expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
+  })
+
   it('keeps a live session open for multiple Discord turns', async () => {
     liveMessages = ['first session turn', 'second session turn']
     const result = await runLiveDogfoodSession(testConfig(), {
@@ -471,6 +526,25 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain(
       'https://discord.com/channels/guild-1/live-thread-1/live-msg-2 -> https://discord.com/channels/guild-1/live-thread-1/reply-msg-2'
     )
+  })
+
+  it('does not hand off a Gateway message again when it remains visible in channel history', async () => {
+    liveMirrorGatewayMessagesToHistory = true
+    liveMessages = ['gateway mirrored turn', 'next mirrored turn']
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open mirrored-history dogfood',
+      turnLimit: 2,
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+
+    expect(result.ok).toBe(true)
+    expect(workflowRuns).toHaveLength(2)
+    expect(workflowRuns.map(run => run.body.input.message_id)).toEqual([
+      'discord:guild-1:live-thread-1:live-msg-1',
+      'discord:guild-1:live-thread-1:live-msg-2'
+    ])
   })
 
   it('keeps an open-ended live session running until the timeout expires', async () => {
@@ -832,7 +906,7 @@ describe('live dogfood chat loop', () => {
 })
 
 function channelReplies(channelId: string): any[] {
-  return [...createdDiscordMessages, ...externalDiscordReplies]
+  return [...historyDiscordMessages, ...createdDiscordMessages, ...externalDiscordReplies]
     .filter(message => message.channel_id === channelId)
     .slice()
     .reverse()
@@ -840,6 +914,7 @@ function channelReplies(channelId: string): any[] {
 
 function sendLiveDiscordMessage(): void {
   if (!activeGateway || !liveTargetReady) return
+  if (!liveDispatchGatewayMessages) return
   const content = liveMessages[liveMessageCursor]
   if (!content) return
   const messageIndex = liveMessageCursor + 1
@@ -859,20 +934,22 @@ function sendLiveDiscordMessage(): void {
       })
     )
   }
+  const message = {
+    id: `live-msg-${messageIndex}`,
+    channel_id: liveConversationChannelId,
+    guild_id: 'guild-1',
+    content: `<@bot-user> ${content}`,
+    author: { id: 'user-1' },
+    mentions: [{ id: 'bot-user' }],
+    attachments: []
+  }
+  if (liveMirrorGatewayMessagesToHistory) historyDiscordMessages.push(message)
   activeGateway.send(
     JSON.stringify({
       op: 0,
       t: 'MESSAGE_CREATE',
       s: messageIndex * 2,
-      d: {
-        id: `live-msg-${messageIndex}`,
-        channel_id: liveConversationChannelId,
-        guild_id: 'guild-1',
-        content: `<@bot-user> ${content}`,
-        author: { id: 'user-1' },
-        mentions: [{ id: 'bot-user' }],
-        attachments: []
-      }
+      d: message
     })
   )
 }
