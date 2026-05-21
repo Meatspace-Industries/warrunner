@@ -75,6 +75,22 @@ preflight:
 pnpm --filter discordbot dogfood:preflight
 ```
 
+To dogfood against an existing Meatspace host environment without copying
+secrets into the repo, run Bun directly with the host env file:
+
+```bash
+cd services/discordbot
+bun --env-file=/var/lib/meepo/hermes/.env src/dogfood.ts preflight
+bun --env-file=/var/lib/meepo/hermes/.env src/dogfood.ts session
+```
+
+Warrunner accepts the existing Meepo Discord aliases when the Warrunner-specific
+values are not set: `MEEPO_DISCORD_GUILD_ID` for `DISCORD_GUILD_ID`,
+`MEEPO_FORUM_CHANNEL_ID` for `WARRUNNER_HOME_FORUM_CHANNEL_ID`,
+`DISCORD_FREE_RESPONSE_CHANNELS` for `WARRUNNER_HOME_CHANNEL_IDS`, and
+`MEEPO_ALLOWED_ROLE_IDS`/`DISCORD_ALLOWED_ROLES` for
+`WARRUNNER_ALLOWED_ROLE_IDS`.
+
 The preflight verifies the Discord bot identity, Gateway URL, configured
 forum/home channels, Centaur health, and that `discord_thread_turn` is
 registered by the API.

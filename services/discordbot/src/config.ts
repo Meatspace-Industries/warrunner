@@ -47,7 +47,7 @@ const EnvSchema = z.object({
 export type AppConfig = z.infer<typeof EnvSchema>
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  return EnvSchema.parse(env)
+  return EnvSchema.parse(withMeatspaceEnvAliases(env))
 }
 
 export function centaurApiKey(config: AppConfig): string | undefined {
@@ -69,4 +69,32 @@ export function homeChannelIds(config: AppConfig): Set<string> {
       .map(value => value.trim())
       .filter(Boolean)
   )
+}
+
+function withMeatspaceEnvAliases(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env }
+  setFallback(next, 'DISCORD_GUILD_ID', env.MEEPO_DISCORD_GUILD_ID)
+  setFallback(next, 'WARRUNNER_HOME_FORUM_CHANNEL_ID', env.MEEPO_FORUM_CHANNEL_ID)
+  setFallback(next, 'WARRUNNER_HOME_CHANNEL_IDS', env.DISCORD_FREE_RESPONSE_CHANNELS)
+  setFallback(
+    next,
+    'WARRUNNER_ALLOWED_ROLE_IDS',
+    joinListAliases(env.MEEPO_ALLOWED_ROLE_IDS, env.DISCORD_ALLOWED_ROLES)
+  )
+  return next
+}
+
+function setFallback(env: NodeJS.ProcessEnv, key: string, value: string | undefined): void {
+  if (!isBlank(env[key]) || isBlank(value)) return
+  env[key] = value
+}
+
+function joinListAliases(...values: Array<string | undefined>): string | undefined {
+  const parts = values.flatMap(value => (value ? splitList(value) : []))
+  const unique = [...new Set(parts)]
+  return unique.length ? unique.join(',') : undefined
+}
+
+function isBlank(value: string | undefined): boolean {
+  return !value?.trim()
 }

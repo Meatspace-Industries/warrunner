@@ -159,7 +159,8 @@ function addRequiredConfigChecks(config: AppConfig, checks: Check[]): void {
     name: 'DISCORD_GUILD_ID',
     ok: Boolean(config.DISCORD_GUILD_ID?.trim()),
     detail: config.DISCORD_GUILD_ID ? config.DISCORD_GUILD_ID : 'missing',
-    hint: 'Set DISCORD_GUILD_ID to the Discord guild/server id used for dogfooding.'
+    hint:
+      'Set DISCORD_GUILD_ID to the Discord guild/server id used for dogfooding. Existing Meepo envs may use MEEPO_DISCORD_GUILD_ID.'
   })
   addCheck(checks, {
     name: 'DISCORD_GATEWAY_ENABLED',
@@ -171,7 +172,8 @@ function addRequiredConfigChecks(config: AppConfig, checks: Check[]): void {
     name: 'home route',
     ok: Boolean(homeChannelIds(config).size || config.WARRUNNER_INTAKE_CHANNEL_IDS.length),
     detail: routeSummary(config),
-    hint: 'Set WARRUNNER_HOME_FORUM_CHANNEL_ID, WARRUNNER_HOME_CHANNEL_IDS, or WARRUNNER_INTAKE_CHANNEL_IDS.'
+    hint:
+      'Set WARRUNNER_HOME_FORUM_CHANNEL_ID, WARRUNNER_HOME_CHANNEL_IDS, or WARRUNNER_INTAKE_CHANNEL_IDS. Existing Meepo envs may use MEEPO_FORUM_CHANNEL_ID or DISCORD_FREE_RESPONSE_CHANNELS.'
   })
 }
 
