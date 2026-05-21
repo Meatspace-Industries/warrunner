@@ -26,6 +26,8 @@ verifies:
   `MESSAGE_CREATE` dispatch over WebSocket.
 - Discordbot resolves the parent forum channel and fetches thread history.
 - Discordbot starts a `discord_thread_turn` workflow run.
+- A Gateway message can complete the emulated chat loop through workflow handoff,
+  final-delivery claim, and Discord reply posting.
 - Discordbot claims a final delivery and posts the final answer back to the
   Discord thread API.
 

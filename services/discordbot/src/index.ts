@@ -8,7 +8,7 @@ import { startFinalDeliveryPoller } from './centaur/final-delivery'
 import { centaurApiKey, loadConfig } from './config'
 import { DiscordChannelResolver, DiscordClient } from './discord/client'
 import { startDiscordGateway } from './discord/gateway'
-import { normalizeDiscordMessage } from './discord/normalize'
+import { createDiscordMessageProcessor } from './discord/process'
 import type { DiscordGatewayPayload, DiscordMessage } from './discord/types'
 import { logError, logInfo, logWarn } from './logging'
 
@@ -16,6 +16,12 @@ const config = loadConfig()
 const discord = new DiscordClient(config)
 const channels = new DiscordChannelResolver(discord)
 const handoff = new CentaurHandoff(config)
+const processDiscordMessage = createDiscordMessageProcessor({
+  config,
+  discord,
+  channels,
+  handoff
+})
 
 void hydrateBotUserId()
 
@@ -100,46 +106,6 @@ export default {
   fetch: app.fetch
 }
 
-async function processDiscordMessage(message: DiscordMessage): Promise<void> {
-  const parentChannelId = await parentChannelIdFor(message)
-  const shallow = normalizeDiscordMessage({
-    message,
-    config,
-    parentChannelId
-  })
-  if (!shallow) return
-
-  const historyMessages =
-    config.WARRUNNER_HISTORY_LIMIT > 0
-      ? await discord
-          .fetchMessages({
-            channelId: message.channel_id,
-            before: message.id,
-            limit: config.WARRUNNER_HISTORY_LIMIT
-          })
-          .catch(error => {
-            logWarn('discord_history_fetch_failed', error)
-            return []
-          })
-      : []
-  const normalized = normalizeDiscordMessage({
-    message,
-    config,
-    parentChannelId,
-    historyMessages
-  })
-  if (!normalized) return
-
-  const result = await handoff.emit(normalized)
-  if (!result.ok) {
-    logError('centaur_handoff_failed', {
-      status: result.status,
-      body: result.body,
-      thread_key: normalized.thread_key
-    })
-  }
-}
-
 async function hydrateBotUserId(): Promise<void> {
   if (config.DISCORD_BOT_USER_ID?.trim() || !config.DISCORD_BOT_TOKEN) return
   try {
@@ -150,18 +116,6 @@ async function hydrateBotUserId(): Promise<void> {
     }
   } catch (error) {
     logWarn('discord_bot_identity_load_failed', error)
-  }
-}
-
-async function parentChannelIdFor(message: DiscordMessage): Promise<string | undefined> {
-  try {
-    return await channels.parentChannelId(message.channel_id)
-  } catch (error) {
-    logWarn('discord_channel_parent_lookup_failed', {
-      channel_id: message.channel_id,
-      error
-    })
-    return undefined
   }
 }
 
