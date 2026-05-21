@@ -1,6 +1,13 @@
 {{- $reposPath := .Values.sandbox.reposPath -}}
 {{- $apiExtraEnv := .Values.api.extraEnv | default dict -}}
 {{- $discordbotExtraEnv := .Values.discordbot.extraEnv | default dict -}}
+{{- $controlPlaneNoProxyHosts := printf "localhost,127.0.0.1,%s,%s" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) -}}
+{{- if .Values.slackbot.enabled -}}
+{{- $controlPlaneNoProxyHosts = printf "%s,%s" $controlPlaneNoProxyHosts (include "centaur.componentName" (dict "root" . "component" "slackbot")) -}}
+{{- end -}}
+{{- if .Values.discordbot.enabled -}}
+{{- $controlPlaneNoProxyHosts = printf "%s,%s" $controlPlaneNoProxyHosts (include "centaur.componentName" (dict "root" . "component" "discordbot")) -}}
+{{- end -}}
 {{- if and .Values.repoCache.enabled (not $reposPath) -}}
 {{- $reposPath = .Values.repoCache.hostPath -}}
 {{- end -}}
@@ -200,9 +207,9 @@ spec:
             - name: SSL_CERT_FILE
               value: /firewall-certs/ca-cert.pem
             - name: NO_PROXY
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "slackbot")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: no_proxy
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "slackbot")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: CENTAUR_LOG_LEVEL
               value: info
             - name: TOOL_DIRS
@@ -511,9 +518,9 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /firewall-certs/ca-cert.pem
             - name: NO_PROXY
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: no_proxy
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
 {{- if .Values.slackbot.runtimeErrorAlertChannel }}
             - name: RUNTIME_ERROR_ALERT_CHANNEL
               value: {{ .Values.slackbot.runtimeErrorAlertChannel | quote }}
@@ -547,7 +554,9 @@ spec:
             secretName: {{ include "centaur.trustedCaSecretName" . }}
 {{- end }}
 {{ if .Values.discordbot.enabled }}
+{{ if .Values.slackbot.enabled }}
 ---
+{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -600,9 +609,9 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /firewall-certs/ca-cert.pem
             - name: NO_PROXY
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: no_proxy
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
 {{- if and .Values.discordbot.guildId (not (hasKey $discordbotExtraEnv "DISCORD_GUILD_ID")) }}
             - name: DISCORD_GUILD_ID
               value: {{ .Values.discordbot.guildId | quote }}

@@ -29,7 +29,9 @@ export const app = new Hono<{ Variables: Variables }>()
   .use(prettyJSON())
   .use('*', async (c, next) => {
     await next()
-    logInfo('http_request', c.req.method, c.req.path, c.res.status)
+    if (config.NODE_ENV !== 'test') {
+      logInfo('http_request', c.req.method, c.req.path, c.res.status)
+    }
   })
   .use('*', timeout(5_000))
   .use(

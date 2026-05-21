@@ -36,5 +36,5 @@ sandbox:
     WARRUNNER_RUNTIME_STATE_DIR: /var/lib/meepo
 
 repoCache:
-  enabled: true
+  enabled: false
   hostPath: /var/lib/meepo/repos
