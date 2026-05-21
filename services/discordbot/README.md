@@ -128,6 +128,8 @@ before any Discord post is created. If no channel id is passed, it uses
 channel. When the target is ready, the command prints a direct Discord URL for
 the created thread or home channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to
 change the default 180-second wait.
+Pass `--open`, or set `WARRUNNER_DOGFOOD_OPEN_DISCORD=true`, to open the printed
+Discord URL automatically when the live target is ready.
 
 For iterative dogfooding from the Discord window, run a short live session:
 
@@ -139,6 +141,7 @@ This uses the same setup as `dogfood:live`, but waits for multiple Discord
 messages and prints each accepted message plus the Discord reply id. It defaults
 to three turns; set `WARRUNNER_DOGFOOD_SESSION_TURNS` to change that count. Use
 the printed Discord URL as the window to keep chatting with Warrunner.
+For the tightest local loop, run `pnpm --filter discordbot dogfood:session -- --open <channel-or-forum-id>`.
 
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
