@@ -367,11 +367,17 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
   ].join('\n')
 }
 
-export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): string {
+export function formatLiveDogfoodSession(
+  result: LiveDogfoodSessionResult,
+  opts: { mode?: 'session' | 'chat' } = {}
+): string {
+  const mode = opts.mode ?? 'session'
   if (!result.ok) {
     const hint = result.hint ? `\n      ${result.hint}` : ''
     const target = result.target?.discordUrl ? `\nPASS Discord URL: ${result.target.discordUrl}` : ''
-    const completed = result.turns.length ? `\nPASS live session turns completed: ${result.turns.length}` : ''
+    const completed = result.turns.length
+      ? `\nPASS live ${mode} turns completed: ${result.turns.length}`
+      : ''
     const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
     const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
     const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
@@ -379,13 +385,13 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
       ? acceptedDiscordMessageUrl(result.observedEvent)
       : undefined
     const eventUrlLine = eventUrl ? `\nPASS Discord message URL: ${eventUrl}` : ''
-    return `FAIL live Discord dogfood session: ${result.error}${target}${completed}${event}${eventUrlLine}${handoff}${execution}${hint}`
+    return `FAIL live Discord dogfood ${mode}: ${result.error}${target}${completed}${event}${eventUrlLine}${handoff}${execution}${hint}`
   }
   const target = result.target.createdThread
     ? `${channelLabel(result.target.channel)} -> ${result.target.createdThread.name ?? result.target.createdThread.id} (${result.target.conversationChannelId})`
     : `${channelLabel(result.target.channel)} (${result.target.conversationChannelId})`
   return [
-    'PASS live Discord dogfood session completed',
+    `PASS live Discord dogfood ${mode} completed`,
     `PASS target: ${target}`,
     ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS turns completed: ${result.turns.length}`,

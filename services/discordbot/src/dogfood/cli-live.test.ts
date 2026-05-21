@@ -328,7 +328,8 @@ describe('dogfood CLI live session', () => {
 
       expect(result.exitCode, `${result.stderr}\n${result.stdout}`).toBe(0)
       expect(result.stdout).toContain('PASS warrunner dogfood preflight passed')
-      expect(result.stdout).toContain('PASS live Discord dogfood session completed')
+      expect(result.stdout).toContain('PASS live Discord dogfood chat completed')
+      expect(result.stdout).not.toContain('PASS live Discord dogfood session completed')
       expect(result.stdout).toContain('PASS turns completed: 2')
       expect(result.stdout).toContain('PASS stop reason: idle_timeout')
       expect(result.stdout).toContain('PASS turn 2: second CLI session turn -> reply-msg-2')

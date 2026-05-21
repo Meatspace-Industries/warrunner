@@ -128,6 +128,24 @@ if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$direct_transcript_output"; the
   exit 1
 fi
 echo
+echo "==> pnpm --filter discordbot dogfood:chat -- --dogfood-env-file=.env.example --transcript-dir=/dev/null/warrunner --no-open"
+if direct_chat_transcript_output="$(
+  pnpm --filter discordbot dogfood:chat -- \
+    --dogfood-env-file=.env.example \
+    --transcript-dir=/dev/null/warrunner \
+    --no-open 2>&1
+)"; then
+  echo "$direct_chat_transcript_output"
+  echo "Expected direct dogfood chat to fail before preflight with an unwritable transcript dir." >&2
+  exit 1
+fi
+echo "$direct_chat_transcript_output"
+grep -q "FAIL dogfood transcript dir:" <<<"$direct_chat_transcript_output"
+if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$direct_chat_transcript_output"; then
+  echo "Direct chat transcript dir validation should fail before dogfood preflight." >&2
+  exit 1
+fi
+echo
 echo "==> pnpm --filter discordbot dogfood:session -- --dogfood-env-file=.env.example --turns=0 --no-open"
 if invalid_turns_output="$(
   pnpm --filter discordbot dogfood:session -- \
@@ -143,6 +161,24 @@ echo "$invalid_turns_output"
 grep -q -- "--turns must be a positive integer" <<<"$invalid_turns_output"
 if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$invalid_turns_output"; then
   echo "Direct session tuning validation should fail before dogfood preflight." >&2
+  exit 1
+fi
+echo
+echo "==> pnpm --filter discordbot dogfood:chat -- --dogfood-env-file=.env.example --turns=0 --no-open"
+if invalid_chat_turns_output="$(
+  pnpm --filter discordbot dogfood:chat -- \
+    --dogfood-env-file=.env.example \
+    --turns=0 \
+    --no-open 2>&1
+)"; then
+  echo "$invalid_chat_turns_output"
+  echo "Expected direct dogfood chat to reject invalid turn count before preflight." >&2
+  exit 1
+fi
+echo "$invalid_chat_turns_output"
+grep -q -- "--turns must be a positive integer" <<<"$invalid_chat_turns_output"
+if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$invalid_chat_turns_output"; then
+  echo "Direct chat tuning validation should fail before dogfood preflight." >&2
   exit 1
 fi
 run uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py

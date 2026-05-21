@@ -208,7 +208,7 @@ if (import.meta.main) {
       turnLimit: args.turnLimit,
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
-    console.log(formatLiveDogfoodSession(result))
+    console.log(formatLiveDogfoodSession(result, { mode: 'chat' }))
     const transcriptOk = await reportDogfoodTranscript('chat', result, transcriptDir)
     process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }

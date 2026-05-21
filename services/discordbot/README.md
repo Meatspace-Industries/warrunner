@@ -79,7 +79,7 @@ pnpm --filter discordbot dogfood:preflight
 To dogfood against an existing Meatspace host environment without copying
 secrets into the repo, use the host wrapper. It defaults to
 `/var/lib/meepo/hermes/.env`, runs from the repo root, opens the Discord target
-automatically for live/session commands, and writes live/session/chat JSON
+automatically for live/session/chat commands, and writes live/session/chat JSON
 transcripts under `/var/lib/meepo/warrunner/dogfood-transcripts`. For
 live/session/chat commands, it validates transcript directory writability before
 starting pnpm or opening a Discord target:
@@ -215,6 +215,7 @@ new setup prompt, pass `--attach`:
 
 ```bash
 pnpm --filter discordbot dogfood:session -- --attach --open --turns 12 --timeout-ms 600000 <thread-or-home-channel-id>
+pnpm --filter discordbot dogfood:chat -- --attach --timeout-ms 3600000 <thread-or-home-channel-id>
 ```
 
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token

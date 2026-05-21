@@ -20,11 +20,11 @@ Options:
   --env-file=<path>          Same as --env-file <path>.
   --dogfood-env-file <path>  Alias for --env-file.
   --dogfood-env-file=<path>  Alias for --env-file=<path>.
-  --transcript-dir <path>    Directory for live/session JSON transcripts.
+  --transcript-dir <path>    Directory for live/session/chat JSON transcripts.
                             Default: /var/lib/meepo/warrunner/dogfood-transcripts
   --transcript-dir=<path>    Same as --transcript-dir <path>.
-  --no-transcript            Disable live/session transcript writing.
-  --open                    Open the printed Discord URL for live/session.
+  --no-transcript            Disable live/session/chat transcript writing.
+  --open                    Open the printed Discord URL for live/session/chat.
   --no-open                 Do not open Discord automatically.
   -h, --help                Show this help.
 
