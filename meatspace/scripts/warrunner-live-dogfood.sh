@@ -37,6 +37,7 @@ Examples:
   meatspace/scripts/warrunner-live-dogfood.sh session -- --attach --turns 12 123456789012345678
   meatspace/scripts/warrunner-live-dogfood.sh chat -- 123456789012345678
   meatspace/scripts/warrunner-live-dogfood.sh chat -- --attach 123456789012345678
+  meatspace/scripts/warrunner-live-dogfood.sh chat -- --operator-user-id <your-user-id> <channel-or-thread-id>
 USAGE
 }
 

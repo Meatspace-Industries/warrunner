@@ -181,6 +181,24 @@ if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$invalid_chat_turns_output"; th
   echo "Direct chat tuning validation should fail before dogfood preflight." >&2
   exit 1
 fi
+echo
+echo "==> pnpm --filter discordbot dogfood:chat -- --dogfood-env-file=.env.example --operator-user-id --no-open"
+if invalid_chat_operator_output="$(
+  pnpm --filter discordbot dogfood:chat -- \
+    --dogfood-env-file=.env.example \
+    --operator-user-id \
+    --no-open 2>&1
+)"; then
+  echo "$invalid_chat_operator_output"
+  echo "Expected direct dogfood chat to reject a missing operator user id before preflight." >&2
+  exit 1
+fi
+echo "$invalid_chat_operator_output"
+grep -q -- "--operator-user-id requires a value" <<<"$invalid_chat_operator_output"
+if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$invalid_chat_operator_output"; then
+  echo "Direct chat operator filtering validation should fail before dogfood preflight." >&2
+  exit 1
+fi
 run uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py
 run helm repo add 1password https://1password.github.io/connect-helm-charts --force-update
 run helm dependency build contrib/chart

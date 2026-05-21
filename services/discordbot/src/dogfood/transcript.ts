@@ -184,6 +184,7 @@ function targetSummary(target: NonNullable<TranscriptResult['target']>): Record<
   return {
     requested_channel_id: target.requestedChannelId,
     conversation_channel_id: target.conversationChannelId,
+    ...(target.operatorUserId ? { operator_user_id: target.operatorUserId } : {}),
     ...(target.discordUrl ? { discord_url: target.discordUrl } : {}),
     channel: channelSummary(target.channel),
     ...(target.createdThread ? { created_thread: channelSummary(target.createdThread) } : {}),

@@ -208,6 +208,9 @@ The direct `dogfood:chat` command opens Discord by default, keeps accepting
 turns until idle timeout, and uses `WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS` or one
 hour as its default timeout. Pass `--no-open`, `--turns <n>`, or
 `--timeout-ms <ms>` to override that operator loop.
+In busy channels, pass `--operator-user-id <discord-user-id>` or set
+`WARRUNNER_DOGFOOD_OPERATOR_USER_ID` so live/session/chat dogfood only accepts
+messages from the operator account you are using in the Discord window.
 The Meatspace host wrapper shortens this to
 `just warrunner-live-dogfood chat -- <channel-or-forum-id>`.
 To reattach to an already-open forum thread or home channel without posting a

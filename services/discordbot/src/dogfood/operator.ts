@@ -13,6 +13,7 @@ export type DogfoodCliArgs = {
   turnLimit?: number
   timeoutMs?: number
   pollIntervalMs?: number
+  operatorUserId?: string
   positional: string[]
   error?: string
 }
@@ -32,8 +33,14 @@ export type OpenDiscordUrlResult =
 
 export function parseDogfoodCliArgs(
   args: string[],
-  env: { WARRUNNER_DOGFOOD_OPEN_DISCORD?: string } = process.env as unknown as {
+  env: {
     WARRUNNER_DOGFOOD_OPEN_DISCORD?: string
+    WARRUNNER_DOGFOOD_OPERATOR_USER_ID?: string
+    WARRUNNER_DOGFOOD_USER_ID?: string
+  } = process.env as unknown as {
+    WARRUNNER_DOGFOOD_OPEN_DISCORD?: string
+    WARRUNNER_DOGFOOD_OPERATOR_USER_ID?: string
+    WARRUNNER_DOGFOOD_USER_ID?: string
   }
 ): DogfoodCliArgs {
   let openDiscord = truthy(env.WARRUNNER_DOGFOOD_OPEN_DISCORD)
@@ -42,6 +49,8 @@ export function parseDogfoodCliArgs(
   let turnLimit: number | undefined
   let timeoutMs: number | undefined
   let pollIntervalMs: number | undefined
+  let operatorUserId =
+    cleanString(env.WARRUNNER_DOGFOOD_OPERATOR_USER_ID) ?? cleanString(env.WARRUNNER_DOGFOOD_USER_ID)
   const positional: string[] = []
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
@@ -121,6 +130,26 @@ export function parseDogfoodCliArgs(
       pollIntervalMs = parsed.value
       continue
     }
+    if (arg === '--operator-user-id' || arg === '--user-id' || arg === '--discord-user-id') {
+      const parsed = parseStringFlag(arg, args[index + 1])
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
+      operatorUserId = parsed.value
+      index += 1
+      continue
+    }
+    if (
+      arg.startsWith('--operator-user-id=') ||
+      arg.startsWith('--user-id=') ||
+      arg.startsWith('--discord-user-id=')
+    ) {
+      const [flag, value = ''] = splitFlagValue(arg)
+      const parsed = parseStringFlag(flag, value)
+      if ('error' in parsed)
+        return { openDiscord, attachOnly, untilTimeout, positional, error: parsed.error }
+      operatorUserId = parsed.value
+      continue
+    }
     positional.push(arg)
   }
   return {
@@ -130,6 +159,7 @@ export function parseDogfoodCliArgs(
     ...(turnLimit ? { turnLimit } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(pollIntervalMs ? { pollIntervalMs } : {}),
+    ...(operatorUserId ? { operatorUserId } : {}),
     positional
   }
 }
@@ -200,9 +230,20 @@ function truthy(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
 }
 
+function cleanString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed || undefined
+}
+
 function splitFlagValue(arg: string): [string, string] {
   const equalsIndex = arg.indexOf('=')
   return [arg.slice(0, equalsIndex), arg.slice(equalsIndex + 1)]
+}
+
+function parseStringFlag(flag: string, value: string | undefined): { value: string } | { error: string } {
+  const trimmed = value?.trim()
+  if (!trimmed || trimmed.startsWith('--')) return { error: `${flag} requires a value` }
+  return { value: trimmed }
 }
 
 function parsePositiveIntegerFlag(

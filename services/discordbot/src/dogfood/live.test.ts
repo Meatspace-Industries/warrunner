@@ -32,6 +32,7 @@ const preludeGatewayMessages: Array<{
   id: string
   channelId: string
   parentChannelId?: string
+  userId?: string
   content: string
 }> = []
 
@@ -403,6 +404,46 @@ describe('live dogfood chat loop', () => {
     expect(workflowRuns[0]?.body.input.parts[0].text).toBe('target thread turn')
     expect(discordPosts[0]?.path).toBe('/channels/live-thread-1/messages')
     expect(discordPosts[0]?.body.message_reference?.message_id).toBe('live-msg-1')
+  })
+
+  it('ignores other Discord users when an operator user filter is configured', async () => {
+    preludeGatewayMessages.push({
+      id: 'other-user-msg-1',
+      channelId: 'live-thread-1',
+      parentChannelId: 'forum-1',
+      userId: 'user-2',
+      content: 'other user should not satisfy dogfood'
+    })
+    liveMessages = ['operator-only target turn']
+    const progress: string[] = []
+
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open operator-filtered dogfood',
+      operatorUserId: 'user-1',
+      turnLimit: 1,
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+      onProgress: line => progress.push(line)
+    })
+    const formatted = formatLiveDogfoodSession(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect(workflowRuns).toHaveLength(1)
+    expect(workflowRuns[0]?.body.input).toMatchObject({
+      thread_key: 'discord:guild-1:forum-1:live-thread-1',
+      message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+      user_id: 'user-1',
+      delivery: {
+        thread_id: 'live-thread-1',
+        message_id: 'live-msg-1'
+      }
+    })
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('operator-only target turn')
+    expect(discordPosts[0]?.body.message_reference?.message_id).toBe('live-msg-1')
+    expect(progress.some(line => line.includes('PASS operator user filter: user-1'))).toBe(true)
+    expect(formatted).toContain('PASS operator user filter: user-1')
   })
 
   it('runs live dogfood in a configured home channel with a bot mention', async () => {
@@ -793,6 +834,7 @@ describe('live dogfood chat loop', () => {
       const result = await runLiveDogfoodSession(testConfig(), {
         channelId: 'forum-1',
         content: 'open transcript dogfood',
+        operatorUserId: 'user-1',
         turnLimit: 2,
         timeoutMs: 5_000,
         pollIntervalMs: 10
@@ -817,6 +859,7 @@ describe('live dogfood chat loop', () => {
         target: {
           requested_channel_id: 'forum-1',
           conversation_channel_id: 'live-thread-1',
+          operator_user_id: 'user-1',
           discord_url: 'https://discord.com/channels/guild-1/live-thread-1'
         },
         turns: [
@@ -1026,6 +1069,7 @@ function sendGatewayUserMessage(opts: {
   id: string
   channelId: string
   parentChannelId?: string
+  userId?: string
   content: string
 }): LiveDiscordSendResult {
   if (!activeGateway) return 'not_ready'
@@ -1055,7 +1099,7 @@ function sendGatewayUserMessage(opts: {
         channel_id: opts.channelId,
         guild_id: 'guild-1',
         content: `<@bot-user> ${opts.content}`,
-        author: { id: 'user-1' },
+        author: { id: opts.userId ?? 'user-1' },
         mentions: [{ id: 'bot-user' }],
         attachments: []
       }
@@ -1074,7 +1118,7 @@ function scheduleLiveDiscordMessage(attempts = 500): void {
 }
 
 function scheduleGatewayUserMessage(
-  opts: { id: string; channelId: string; parentChannelId?: string; content: string },
+  opts: { id: string; channelId: string; parentChannelId?: string; userId?: string; content: string },
   attempts = 500
 ): void {
   const timer = setTimeout(() => {

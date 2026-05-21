@@ -136,6 +136,7 @@ if (import.meta.main) {
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
       setupMode: args.attachOnly ? 'attach' : 'prompt',
+      operatorUserId: args.operatorUserId,
       timeoutMs: args.timeoutMs ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
       pollIntervalMs: args.pollIntervalMs,
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
@@ -165,6 +166,7 @@ if (import.meta.main) {
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
       setupMode: args.attachOnly ? 'attach' : 'prompt',
+      operatorUserId: args.operatorUserId,
       timeoutMs: args.timeoutMs ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
       pollIntervalMs: args.pollIntervalMs,
       untilTimeout: args.untilTimeout,
@@ -199,6 +201,7 @@ if (import.meta.main) {
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
       setupMode: args.attachOnly ? 'attach' : 'prompt',
+      operatorUserId: args.operatorUserId,
       timeoutMs:
         args.timeoutMs ??
         parsePositiveInt(env.WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS) ??
@@ -215,7 +218,7 @@ if (import.meta.main) {
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--turns=<n>|--until-timeout] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:chat -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--turns=<n>] [--timeout-ms=<ms>] [--no-open] <channel-id> [message]'
+      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--operator-user-id=<discord-user-id>] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--operator-user-id=<discord-user-id>] [--turns=<n>|--until-timeout] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:chat -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--attach] [--operator-user-id=<discord-user-id>] [--turns=<n>] [--timeout-ms=<ms>] [--no-open] <channel-id> [message]'
     )
     process.exit(2)
   }

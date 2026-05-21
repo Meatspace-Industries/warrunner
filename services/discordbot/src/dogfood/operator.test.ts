@@ -69,6 +69,37 @@ describe('dogfood operator CLI args', () => {
     })
   })
 
+  it('strips operator user filters from positional channel and message args', () => {
+    expect(
+      parseDogfoodCliArgs([
+        '--operator-user-id',
+        'user-1',
+        '--discord-user-id=user-2',
+        'thread-1',
+        'keep',
+        'chatting'
+      ])
+    ).toEqual({
+      openDiscord: false,
+      attachOnly: false,
+      untilTimeout: false,
+      operatorUserId: 'user-2',
+      positional: ['thread-1', 'keep', 'chatting']
+    })
+
+    expect(
+      parseDogfoodCliArgs(['thread-1'], {
+        WARRUNNER_DOGFOOD_OPERATOR_USER_ID: ' user-from-env '
+      })
+    ).toEqual({
+      openDiscord: false,
+      attachOnly: false,
+      untilTimeout: false,
+      operatorUserId: 'user-from-env',
+      positional: ['thread-1']
+    })
+  })
+
   it('supports open-ended sessions until timeout', () => {
     expect(parseDogfoodCliArgs(['--turns', '12', '--until-timeout', 'thread-1'])).toEqual({
       openDiscord: false,
@@ -99,6 +130,13 @@ describe('dogfood operator CLI args', () => {
       untilTimeout: false,
       positional: [],
       error: '--timeout-ms requires a positive integer'
+    })
+    expect(parseDogfoodCliArgs(['--operator-user-id', '--open', 'forum-1'])).toEqual({
+      openDiscord: false,
+      attachOnly: false,
+      untilTimeout: false,
+      positional: [],
+      error: '--operator-user-id requires a value'
     })
   })
 })

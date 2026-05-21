@@ -17,6 +17,7 @@ type LiveDogfoodOptions = {
   content?: string
   appliedTagIds?: string[]
   setupMode?: LiveSetupMode
+  operatorUserId?: string
   timeoutMs?: number
   pollIntervalMs?: number
   onProgress?: (line: string) => void
@@ -33,6 +34,7 @@ type LiveTarget = {
   requestedChannelId: string
   channel: DiscordChannel
   conversationChannelId: string
+  operatorUserId?: string
   discordUrl?: string
   createdThread?: DiscordChannel
   setupMessage?: DiscordMessage
@@ -184,6 +186,7 @@ export async function runLiveDogfoodSession(
   const turns: LiveDogfoodTurn[] = []
   let acceptedTurn: AcceptedLiveDogfoodTurn | undefined
   const untilTimeout = opts.untilTimeout === true
+  const operatorUserId = opts.operatorUserId?.trim()
 
   try {
     const botUser = await discord.fetchCurrentUser()
@@ -207,13 +210,14 @@ export async function runLiveDogfoodSession(
     const pendingLiveMessages: DiscordMessage[] = []
     const handoff = new ObservingHandoff(
       config,
-      event => Boolean(target && event.channel_id === target.conversationChannelId),
+      event => Boolean(target && liveEventMatchesTarget(event, target, operatorUserId)),
       value => {
         tracker.accept(value)
       }
     )
     const processMessage = createDiscordMessageProcessor({ config, discord, channels, handoff })
     const processLiveMessage = dedupeDiscordMessageProcessor(message => {
+      if (!liveMessageMatchesOperator(message, operatorUserId)) return Promise.resolve()
       if (!target) {
         pendingLiveMessages.push(message)
         return Promise.resolve()
@@ -241,7 +245,7 @@ export async function runLiveDogfoodSession(
           hint: 'Pass an existing forum thread id, home channel id, or omit --attach so live dogfood can create a forum thread.'
         }
       }
-      target = targetFromChannel(config, requestedChannelId, requestedChannel)
+      target = targetFromChannel(config, requestedChannelId, requestedChannel, operatorUserId)
     } else {
       const setup = await runSmokePost(config, {
         channelId: requestedChannelId,
@@ -257,9 +261,9 @@ export async function runLiveDogfoodSession(
           hint: setup.hint
         }
       }
-      target = targetFromSmoke(config, requestedChannelId, setup)
+      target = targetFromSmoke(config, requestedChannelId, setup, operatorUserId)
     }
-    await drainPendingLiveMessages(pendingLiveMessages, target, processMessage)
+    await drainPendingLiveMessages(pendingLiveMessages, target, operatorUserId, processMessage)
     const historyIntakeSeenMessageIds = new Set<string>()
     let historyCursor = target.setupMessage?.id ?? (await latestMessageId(discord, target.conversationChannelId))
     opts.onProgress?.(formatLiveTarget(target, botUser.id, timeoutMs))
@@ -280,6 +284,7 @@ export async function runLiveDogfoodSession(
           afterMessageId: historyCursor,
           processMessage: processLiveMessage,
           seenMessageIds: historyIntakeSeenMessageIds,
+          operatorUserId,
           timeoutMs: remainingTimeout(timeoutMs, startedAt),
           pollIntervalMs,
           timeoutMessage: nextMessageTimeout,
@@ -360,6 +365,7 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
   return [
     'PASS live Discord chat loop completed',
     `PASS target: ${target}`,
+    ...(result.target.operatorUserId ? [`PASS operator user filter: ${result.target.operatorUserId}`] : []),
     ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS workflow handoff: ${result.handoff.status}`,
     ...(result.executionId ? [`PASS workflow execution: ${result.executionId}`] : []),
@@ -401,6 +407,7 @@ export function formatLiveDogfoodSession(
   return [
     `PASS live Discord dogfood ${mode} completed`,
     `PASS target: ${target}`,
+    ...(result.target.operatorUserId ? [`PASS operator user filter: ${result.target.operatorUserId}`] : []),
     ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS turns completed: ${result.turns.length}`,
     `PASS stop reason: ${result.stopReason}`,
@@ -580,13 +587,31 @@ function dedupeDiscordMessageProcessor(
 async function drainPendingLiveMessages(
   pending: DiscordMessage[],
   target: LiveTarget,
+  operatorUserId: string | undefined,
   processMessage: (message: DiscordMessage) => Promise<void>
 ): Promise<void> {
   const messages = pending.splice(0, pending.length)
   for (const message of messages) {
     if (message.channel_id !== target.conversationChannelId) continue
+    if (!liveMessageMatchesOperator(message, operatorUserId)) continue
     await processMessage(message)
   }
+}
+
+function liveEventMatchesTarget(
+  event: NormalizedDiscordEvent,
+  target: LiveTarget,
+  operatorUserId: string | undefined
+): boolean {
+  if (event.channel_id !== target.conversationChannelId) return false
+  return !operatorUserId || event.user_id === operatorUserId
+}
+
+function liveMessageMatchesOperator(
+  message: DiscordMessage,
+  operatorUserId: string | undefined
+): boolean {
+  return !operatorUserId || message.author?.id === operatorUserId
 }
 
 async function waitForAcceptedTurn(opts: {
@@ -597,6 +622,7 @@ async function waitForAcceptedTurn(opts: {
   afterMessageId?: string
   processMessage: (message: DiscordMessage) => Promise<void>
   seenMessageIds: Set<string>
+  operatorUserId?: string
   timeoutMs: number
   pollIntervalMs: number
   timeoutMessage: string
@@ -615,6 +641,7 @@ async function waitForAcceptedTurn(opts: {
       processMessage: opts.processMessage,
       seenMessageIds: opts.seenMessageIds,
       tracker: opts.tracker,
+      operatorUserId: opts.operatorUserId,
       onProgress: opts.onProgress
     })
     cursor = polled.afterMessageId
@@ -634,6 +661,7 @@ async function processChannelHistoryIntake(opts: {
   processMessage: (message: DiscordMessage) => Promise<void>
   seenMessageIds: Set<string>
   tracker: LiveTurnTracker
+  operatorUserId?: string
   onProgress?: (line: string) => void
 }): Promise<{ afterMessageId?: string }> {
   const messages = await opts.discord
@@ -648,6 +676,7 @@ async function processChannelHistoryIntake(opts: {
     if (message.channel_id !== opts.channelId) continue
     cursor = message.id || cursor
     if (!message.id || message.author?.bot || message.webhook_id) continue
+    if (!liveMessageMatchesOperator(message, opts.operatorUserId)) continue
     if (opts.seenMessageIds.has(message.id) || opts.tracker.hasDiscordMessageId(message.id)) continue
     opts.seenMessageIds.add(message.id)
     opts.onProgress?.(`PASS live Discord history intake: ${message.id}`)
@@ -804,7 +833,8 @@ function liveRouteStatus(
 function targetFromSmoke(
   config: AppConfig,
   requestedChannelId: string,
-  result: Extract<SmokePostResult, { ok: true }>
+  result: Extract<SmokePostResult, { ok: true }>,
+  operatorUserId?: string
 ): LiveTarget {
   const conversationChannelId = result.createdThread?.id ?? result.channel.id
   const discordUrl = discordChannelUrl(config, result, conversationChannelId)
@@ -812,6 +842,7 @@ function targetFromSmoke(
     requestedChannelId,
     channel: result.channel,
     conversationChannelId,
+    ...(operatorUserId ? { operatorUserId } : {}),
     ...(discordUrl ? { discordUrl } : {}),
     ...(result.createdThread ? { createdThread: result.createdThread } : {}),
     ...(result.message ? { setupMessage: result.message } : {})
@@ -821,7 +852,8 @@ function targetFromSmoke(
 function targetFromChannel(
   config: AppConfig,
   requestedChannelId: string,
-  channel: DiscordChannel
+  channel: DiscordChannel,
+  operatorUserId?: string
 ): LiveTarget {
   const conversationChannelId = channel.id
   const discordUrl = discordChannelUrlForChannel(config, channel, conversationChannelId)
@@ -829,6 +861,7 @@ function targetFromChannel(
     requestedChannelId,
     channel,
     conversationChannelId,
+    ...(operatorUserId ? { operatorUserId } : {}),
     ...(discordUrl ? { discordUrl } : {})
   }
 }
@@ -846,14 +879,19 @@ function livePrompt(botUserId: string | undefined, timeoutMs: number): string {
 function formatLiveTarget(target: LiveTarget, botUserId: string | undefined, timeoutMs: number): string {
   const mention = botUserId ? `<@${botUserId}>` : '@Warrunner'
   const seconds = Math.round(timeoutMs / 1_000)
+  const operator = target.operatorUserId
+    ? [`PASS operator user filter: ${target.operatorUserId}`]
+    : []
   if (target.createdThread || isThreadChannel(target.channel)) {
     return [
       `PASS live target ready: ${conversationLabel(target)} (${target.conversationChannelId}); reply in that thread within ${seconds}s.`,
+      ...operator,
       ...(target.discordUrl ? [`PASS Discord URL: ${target.discordUrl}`] : [])
     ].join('\n')
   }
   return [
     `PASS live target ready: ${channelLabel(target.channel)} (${target.conversationChannelId}); send a Discord message mentioning ${mention} within ${seconds}s.`,
+    ...operator,
     ...(target.discordUrl ? [`PASS Discord URL: ${target.discordUrl}`] : [])
   ].join('\n')
 }
