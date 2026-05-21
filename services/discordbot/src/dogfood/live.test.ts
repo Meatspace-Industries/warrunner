@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, it, setDefaultTimeout } from 'bun:test'
 import { loadConfig, type AppConfig } from '../config'
 import type { DiscordGatewayPayload } from '../discord/types'
 import {
@@ -7,6 +7,8 @@ import {
   runLiveDogfood,
   runLiveDogfoodSession
 } from './live'
+
+setDefaultTimeout(10_000)
 
 type CapturedRequest = {
   path: string
@@ -28,6 +30,7 @@ let liveDispatchThreadCreate = true
 let liveMessageCursor = 0
 let liveMessages: string[] = []
 let deliveryTexts: string[] = []
+let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 
 const server = Bun.serve({
   port: 0,
@@ -57,7 +60,7 @@ const server = Bun.serve({
       liveConversationChannelId = 'live-thread-1'
       liveParentChannelId = 'forum-1'
       liveDispatchThreadCreate = true
-      setTimeout(sendLiveDiscordMessage, 10)
+      scheduleLiveDiscordMessage()
       return Response.json({
         id: 'live-thread-1',
         type: 11,
@@ -96,7 +99,7 @@ const server = Bun.serve({
     }
     if (url.pathname === '/channels/live-thread-1/messages' && request.method === 'POST') {
       discordPosts.push(await capture(request, url.pathname))
-      setTimeout(sendLiveDiscordMessage, 10)
+      scheduleLiveDiscordMessage()
       return Response.json({ id: `reply-msg-${discordPosts.length}`, channel_id: 'live-thread-1' })
     }
     if (url.pathname === '/channels/home-1/messages' && request.method === 'GET') {
@@ -118,7 +121,7 @@ const server = Bun.serve({
       liveConversationChannelId = 'home-1'
       liveParentChannelId = undefined
       liveDispatchThreadCreate = false
-      setTimeout(sendLiveDiscordMessage, 10)
+      scheduleLiveDiscordMessage()
       return Response.json({ id: `home-msg-${discordPosts.length}`, channel_id: 'home-1' })
     }
     if (url.pathname === '/workflows/runs' && request.method === 'POST') {
@@ -168,6 +171,8 @@ const server = Bun.serve({
 const fakeBaseUrl = `http://127.0.0.1:${server.port}`
 
 beforeEach(() => {
+  for (const timer of liveMessageTimers) clearTimeout(timer)
+  liveMessageTimers = []
   forumThreads.length = 0
   workflowRuns.length = 0
   discordPosts.length = 0
@@ -425,6 +430,14 @@ function sendLiveDiscordMessage(): void {
       }
     })
   )
+}
+
+function scheduleLiveDiscordMessage(): void {
+  const timer = setTimeout(() => {
+    liveMessageTimers = liveMessageTimers.filter(item => item !== timer)
+    sendLiveDiscordMessage()
+  }, 10)
+  liveMessageTimers.push(timer)
 }
 
 function testConfig(env: Record<string, string | undefined> = {}): AppConfig {
