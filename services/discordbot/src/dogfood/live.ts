@@ -770,21 +770,26 @@ async function observeBotReplyFromDiscord(opts: {
     })
     .catch(() => [])
   const locallyDeliveredIds = new Set(opts.discord.observedReplies.map(reply => reply.message.id))
-  const candidates = messages
-    .filter(message => message.channel_id === opts.channelId)
-    .filter(message => message.author?.id === botUserId)
-    .filter(message => !locallyDeliveredIds.has(message.id))
-    .filter(message => String(message.content ?? '').trim())
-  const firstReplyIndex = candidates.findIndex(message =>
-    referencesDiscordMessage(message, opts.afterMessageId)
+  const firstReplyIndex = messages.findIndex(
+    message =>
+      message.channel_id === opts.channelId &&
+      message.author?.id === botUserId &&
+      !locallyDeliveredIds.has(message.id) &&
+      Boolean(String(message.content ?? '').trim()) &&
+      referencesDiscordMessage(message, opts.afterMessageId)
   )
   if (firstReplyIndex < 0) return undefined
 
-  const replies = candidates.slice(firstReplyIndex).map(message => ({
-    channelId: opts.channelId,
-    content: String(message.content ?? ''),
-    message
-  }))
+  const replies: ObservedReplyMessage[] = []
+  for (const message of messages.slice(firstReplyIndex)) {
+    if (message.channel_id !== opts.channelId) break
+    if (message.author?.id !== botUserId) break
+    if (locallyDeliveredIds.has(message.id)) break
+    const content = String(message.content ?? '').trim()
+    if (!content) break
+    if (replies.length > 0 && referencesOtherDiscordMessage(message, opts.afterMessageId)) break
+    replies.push({ channelId: opts.channelId, content: String(message.content ?? ''), message })
+  }
 
   const first = replies[0]
   if (!first) return undefined
@@ -796,6 +801,11 @@ function referencesDiscordMessage(message: DiscordMessage, messageId: string): b
     message.message_reference?.message_id === messageId ||
     message.referenced_message?.id === messageId
   )
+}
+
+function referencesOtherDiscordMessage(message: DiscordMessage, messageId: string): boolean {
+  const referencedMessageId = message.message_reference?.message_id ?? message.referenced_message?.id
+  return Boolean(referencedMessageId && referencedMessageId !== messageId)
 }
 
 function handoffExecutionId(result: CentaurHandoffResult): string | undefined {

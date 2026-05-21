@@ -51,6 +51,7 @@ let injectUnrelatedDeliveryBeforeNext = false
 let dropExpectedDeliveryAfterStale = false
 let externalDeliveryClaimedByService = false
 let externalDeliveryReferencesAcceptedMessage = true
+let externalDeliveryAddsUnrelatedReferencedReply = false
 let workflowResponseIncludesExecutionId = true
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 let liveMessageScheduleDelaysMs: number[] = []
@@ -207,6 +208,22 @@ const server = Bun.serve({
               }
             : {})
         })
+        if (externalDeliveryAddsUnrelatedReferencedReply) {
+          externalDiscordReplies.push({
+            id: `external-chatter-${runIndex}`,
+            channel_id: captured.body.input.delivery.thread_id ?? captured.body.input.delivery.channel_id,
+            guild_id: captured.body.input.delivery.guild_id,
+            content: 'unrelated bot chatter after external final answer',
+            author: { id: 'bot-user', bot: true },
+            attachments: [],
+            message_reference: {
+              message_id: 'other-user-msg-1',
+              channel_id: captured.body.input.delivery.thread_id ?? captured.body.input.delivery.channel_id,
+              guild_id: captured.body.input.delivery.guild_id,
+              fail_if_not_exists: false
+            }
+          })
+        }
         return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
       }
       if (injectStaleDeliveryBeforeNext) {
@@ -310,6 +327,7 @@ beforeEach(() => {
   dropExpectedDeliveryAfterStale = false
   externalDeliveryClaimedByService = false
   externalDeliveryReferencesAcceptedMessage = true
+  externalDeliveryAddsUnrelatedReferencedReply = false
   workflowResponseIncludesExecutionId = true
   liveMessageScheduleDelaysMs = []
 })
@@ -934,6 +952,37 @@ describe('live dogfood chat loop', () => {
     expect(result.reply.source).toBe('channel_history')
     expect(formatted).toContain('PASS Discord reply posted: external-reply-1')
     expect(formatted).toContain('PASS Discord reply source: channel_history')
+  })
+
+  it('does not group unrelated referenced bot chatter into external replies', async () => {
+    liveMessages = ['externally delivered reply with chatter']
+    deliveryTexts = ['externally posted answer before chatter']
+    externalDeliveryClaimedByService = true
+    externalDeliveryAddsUnrelatedReferencedReply = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'live-thread-1',
+      setupMode: 'attach',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+      onProgress: line => {
+        if (line.includes('PASS live target ready')) {
+          liveTargetReady = true
+          liveConversationChannelId = 'live-thread-1'
+          liveParentChannelId = 'forum-1'
+          scheduleLiveDiscordMessage()
+        }
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected live dogfood to pass')
+    expect(externalDiscordReplies.map(message => message.id)).toEqual([
+      'external-reply-1',
+      'external-chatter-1'
+    ])
+    expect(result.reply.source).toBe('channel_history')
+    expect(result.reply.messages.map(reply => reply.message.id)).toEqual(['external-reply-1'])
+    expect(result.reply.content).toBe('externally posted answer before chatter')
   })
 
   it('does not count unrelated bot chatter as an external final-delivery reply', async () => {
