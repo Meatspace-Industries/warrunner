@@ -1,15 +1,19 @@
-import type { CentaurHandoff } from '../centaur/handoff'
+import type { CentaurHandoffResult } from '../centaur/handoff'
 import type { AppConfig } from '../config'
 import { logError, logWarn } from '../logging'
 import type { DiscordChannelResolver, DiscordClient } from './client'
 import { normalizeDiscordMessage } from './normalize'
-import type { DiscordMessage } from './types'
+import type { DiscordMessage, NormalizedDiscordEvent } from './types'
+
+export type DiscordHandoff = {
+  emit(event: NormalizedDiscordEvent): Promise<CentaurHandoffResult>
+}
 
 export function createDiscordMessageProcessor(opts: {
   config: AppConfig
   discord: DiscordClient
   channels: DiscordChannelResolver
-  handoff: CentaurHandoff
+  handoff: DiscordHandoff
 }): (message: DiscordMessage) => Promise<void> {
   return async function processDiscordMessage(message: DiscordMessage): Promise<void> {
     const parentChannelId = await parentChannelIdFor(opts.channels, message)

@@ -2,6 +2,7 @@ import { centaurApiKey, homeChannelIds, loadConfig, type AppConfig } from './con
 import { DiscordApiError, DiscordClient } from './discord/client'
 import type { DiscordUser } from './discord/types'
 import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
+import { formatLiveDogfood, runLiveDogfood } from './dogfood/live'
 import { formatSmokePost, runSmokePost } from './dogfood/smoke'
 
 type Check = {
@@ -85,10 +86,29 @@ if (import.meta.main) {
     console.log(formatSmokePost(result))
     process.exit(result.ok ? 0 : 1)
   }
+  if (command === 'live') {
+    const config = loadConfig()
+    const preflight = await runPreflight(config)
+    console.log(formatPreflight(preflight))
+    if (!preflight.ok) process.exit(1)
+
+    const argChannelId = process.argv[3]?.trim()
+    const channelId = argChannelId || process.env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
+    const contentArgs = argChannelId ? process.argv.slice(4) : process.argv.slice(3)
+    const result = await runLiveDogfood(config, {
+      channelId,
+      content: contentArgs.join(' '),
+      appliedTagIds: splitList(process.env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
+      timeoutMs: parsePositiveInt(process.env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
+      onProgress: line => console.log(line)
+    })
+    console.log(formatLiveDogfood(result))
+    process.exit(result.ok ? 0 : 1)
+  }
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- <channel-id> [message]'
+      'Usage: pnpm --filter discordbot dogfood:preflight | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- <channel-id> [message] | pnpm --filter discordbot dogfood:live -- <channel-id> [message]'
     )
     process.exit(2)
   }
@@ -115,6 +135,12 @@ function addRequiredConfigChecks(config: AppConfig, checks: Check[]): void {
     ok: Boolean(config.DISCORD_GUILD_ID?.trim()),
     detail: config.DISCORD_GUILD_ID ? config.DISCORD_GUILD_ID : 'missing',
     hint: 'Set DISCORD_GUILD_ID to the Discord guild/server id used for dogfooding.'
+  })
+  addCheck(checks, {
+    name: 'DISCORD_GATEWAY_ENABLED',
+    ok: config.DISCORD_GATEWAY_ENABLED,
+    detail: config.DISCORD_GATEWAY_ENABLED ? 'enabled' : 'disabled',
+    hint: 'Set DISCORD_GATEWAY_ENABLED=true so Discord window messages reach Warrunner.'
   })
   addCheck(checks, {
     name: 'home route',
@@ -295,4 +321,9 @@ function splitList(value: string): string[] {
     .split(/[\s,]+/)
     .map(part => part.trim())
     .filter(Boolean)
+}
+
+function parsePositiveInt(value: string | undefined): number | undefined {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : undefined
 }

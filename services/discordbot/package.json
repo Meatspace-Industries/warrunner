@@ -11,6 +11,7 @@
     "dev": "bun --hot --watch src/index.ts",
     "dogfood": "bun src/dogfood.ts",
     "dogfood:emulated": "bun src/dogfood.ts emulated",
+    "dogfood:live": "bun src/dogfood.ts live",
     "dogfood:preflight": "bun src/dogfood.ts preflight",
     "dogfood:smoke": "bun src/dogfood.ts smoke",
     "test": "bun test src/*.test.ts src/**/*.test.ts",

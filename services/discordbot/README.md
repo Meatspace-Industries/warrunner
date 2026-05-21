@@ -85,6 +85,20 @@ You can also set `WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID` and run
 For tag-required forums, set `WARRUNNER_DOGFOOD_SMOKE_TAG_IDS` to a comma- or
 space-separated list of tag ids.
 
+To exercise the real Discord-window loop from one terminal, run:
+
+```bash
+pnpm --filter discordbot dogfood:live -- <channel-or-forum-id>
+```
+
+`dogfood:live` runs the preflight, starts the Gateway consumer, creates a
+dogfood post or thread, waits for you to send a real Discord message there,
+hands that message to `discord_thread_turn`, polls Centaur final deliveries, and
+only passes after a Discord reply is posted. If no channel id is passed, it uses
+`WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID`, then the configured home forum/home
+channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to change the default
+180-second wait.
+
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
 lookup.
