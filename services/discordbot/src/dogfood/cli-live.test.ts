@@ -16,6 +16,7 @@ type CapturedRequest = {
 const workflowRuns: CapturedRequest[] = []
 const discordPosts: CapturedRequest[] = []
 const delivered: CapturedRequest[] = []
+const forumThreadCreates: CapturedRequest[] = []
 const pendingDeliveries: any[] = []
 const createdDiscordMessages: any[] = []
 const liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
@@ -54,6 +55,7 @@ const server = Bun.serve({
     }
     if (url.pathname === '/channels/forum-1/threads' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
+      forumThreadCreates.push(captured)
       liveTargetReady = true
       scheduleLiveDiscordMessage()
       return Response.json({
@@ -73,6 +75,8 @@ const server = Bun.serve({
       })
     }
     if (url.pathname === '/channels/live-thread-1' && request.method === 'GET') {
+      liveTargetReady = true
+      scheduleLiveDiscordMessage()
       return Response.json({
         id: 'live-thread-1',
         type: 11,
@@ -162,6 +166,7 @@ beforeEach(() => {
   workflowRuns.length = 0
   discordPosts.length = 0
   delivered.length = 0
+  forumThreadCreates.length = 0
   pendingDeliveries.length = 0
   createdDiscordMessages.length = 0
   activeGateway = null
@@ -363,6 +368,92 @@ describe('dogfood CLI live session', () => {
       expect(transcript.turns).toHaveLength(2)
       expect(transcriptText).not.toContain('discord-token')
       expect(transcriptText).not.toContain('centaur-key')
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('runs the real chat CLI attached to an existing forum thread without creating a setup prompt', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'warrunner-cli-attach-chat-'))
+    const envFile = join(tmp, '.env')
+    const transcriptDir = join(tmp, 'transcripts')
+    liveMessages = ['attached CLI chat turn', 'attached CLI chat followup']
+    try {
+      await writeFile(
+        envFile,
+        [
+          `DISCORD_API_URL=${fakeBaseUrl}`,
+          `CENTAUR_API_URL=${fakeBaseUrl}`,
+          'DISCORD_BOT_TOKEN=discord-token',
+          'DISCORDBOT_API_KEY=centaur-key',
+          'DISCORD_GATEWAY_ENABLED=true',
+          'DISCORD_GUILD_ID=guild-1',
+          'DISCORD_BOT_USER_ID=bot-user',
+          'WARRUNNER_HOME_FORUM_CHANNEL_ID=forum-1',
+          'WARRUNNER_HOME_CHANNEL_ID=',
+          'WARRUNNER_HOME_CHANNEL_IDS=',
+          'WARRUNNER_INTAKE_CHANNEL_IDS=',
+          'DISCORD_FREE_RESPONSE_CHANNELS=',
+          'WARRUNNER_ALLOWED_ROLE_IDS=',
+          'MEEPO_ALLOWED_ROLE_IDS=',
+          'DISCORD_ALLOWED_ROLES=',
+          'WARRUNNER_DISCORDBOT_URL=',
+          'WARRUNNER_HISTORY_LIMIT=10'
+        ].join('\n')
+      )
+
+      const result = await runDogfoodCli([
+        'chat',
+        `--dogfood-env-file=${envFile}`,
+        `--transcript-dir=${transcriptDir}`,
+        '--attach',
+        '--turns=2',
+        '--operator-user-id=user-1',
+        '--no-open',
+        '--poll-interval-ms=10',
+        '--timeout-ms=5000',
+        'live-thread-1'
+      ])
+
+      expect(result.exitCode, `${result.stderr}\n${result.stdout}`).toBe(0)
+      expect(result.stdout).toContain('PASS warrunner dogfood preflight passed')
+      expect(result.stdout).toContain('PASS live Discord dogfood chat completed')
+      expect(result.stdout).toContain('PASS operator user filter: user-1')
+      expect(result.stdout).toContain('PASS turns completed: 2')
+      expect(result.stdout).toContain('PASS stop reason: turn_limit')
+      expect(result.stdout).toContain('PASS turn 1: attached CLI chat turn -> reply-msg-1')
+      expect(result.stdout).toContain('PASS turn 2: attached CLI chat followup -> reply-msg-2')
+      expect(forumThreadCreates).toHaveLength(0)
+      expect(workflowRuns.map(run => run.body.input.parts[0].text)).toEqual([
+        'attached CLI chat turn',
+        'attached CLI chat followup'
+      ])
+      expect(discordPosts.map(post => post.body.message_reference?.message_id)).toEqual([
+        'live-msg-1',
+        'live-msg-2'
+      ])
+
+      const transcripts = await readdir(transcriptDir)
+      expect(transcripts).toHaveLength(1)
+      expect(transcripts[0]).toContain('chat')
+      expect(transcripts[0]).toContain('pass')
+      const transcriptText = await readFile(join(transcriptDir, transcripts[0] ?? ''), 'utf8')
+      const transcript = JSON.parse(transcriptText) as any
+      expect(transcript).toMatchObject({
+        command: 'chat',
+        ok: true,
+        stop_reason: 'turn_limit',
+        target: {
+          requested_channel_id: 'live-thread-1',
+          conversation_channel_id: 'live-thread-1',
+          operator_user_id: 'user-1',
+          discord_url: 'https://discord.com/channels/guild-1/live-thread-1'
+        }
+      })
+      expect(transcript.turns.map((turn: any) => turn.text)).toEqual([
+        'attached CLI chat turn',
+        'attached CLI chat followup'
+      ])
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }

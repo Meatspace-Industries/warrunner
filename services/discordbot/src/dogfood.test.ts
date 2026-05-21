@@ -35,6 +35,15 @@ const server = Bun.serve({
         guild_id: 'guild-1'
       })
     }
+    if (url.pathname === '/channels/thread-home-1' && request.method === 'GET') {
+      return Response.json({
+        id: 'thread-home-1',
+        type: 11,
+        name: 'warrunner-home-thread',
+        parent_id: 'forum-1',
+        guild_id: 'guild-1'
+      })
+    }
     if (url.pathname === '/channels/smoke-1' && request.method === 'GET') {
       return Response.json({
         id: 'smoke-1',
@@ -140,6 +149,19 @@ describe('dogfood preflight', () => {
 
     expect(result.ok).toBe(true)
     expect(formatted).toContain('PASS Discordbot readiness: 200 OK bot=warrunner (bot-user)')
+  })
+
+  it('accepts an existing forum thread as a configured home route', async () => {
+    const result = await runPreflight(
+      testConfig({
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: '',
+        WARRUNNER_HOME_CHANNEL_IDS: 'thread-home-1'
+      })
+    )
+    const formatted = formatPreflight(result)
+
+    expect(result.ok).toBe(true)
+    expect(formatted).toContain('PASS home channel thread-home-1: warrunner-home-thread public_thread')
   })
 
   it('fails when the configured Discordbot readiness endpoint is not ready', async () => {

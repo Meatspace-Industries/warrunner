@@ -49,6 +49,9 @@ const CHANNEL_TYPES: Record<number, string> = {
   15: 'guild_forum',
   16: 'guild_media'
 }
+const FORUM_CHANNEL_TYPES = new Set([15, 16])
+const HOME_ROUTE_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12, 15, 16])
+const INTAKE_CHANNEL_TYPES = new Set([0, 5])
 
 export async function runPreflight(config: AppConfig = loadConfig()): Promise<PreflightResult> {
   const checks: Check[] = []
@@ -333,13 +336,13 @@ async function checkDiscordChannels(
 ): Promise<void> {
   const seen = new Set<string>()
   const targets = [
-    ...channelTargets('home forum', [config.WARRUNNER_HOME_FORUM_CHANNEL_ID], new Set([15, 16])),
+    ...channelTargets('home forum', [config.WARRUNNER_HOME_FORUM_CHANNEL_ID], FORUM_CHANNEL_TYPES),
     ...channelTargets(
       'home channel',
       [...homeChannelIds(config)].filter(id => id !== config.WARRUNNER_HOME_FORUM_CHANNEL_ID),
-      new Set([0, 5])
+      HOME_ROUTE_CHANNEL_TYPES
     ),
-    ...channelTargets('intake channel', config.WARRUNNER_INTAKE_CHANNEL_IDS, new Set([0, 5]))
+    ...channelTargets('intake channel', config.WARRUNNER_INTAKE_CHANNEL_IDS, INTAKE_CHANNEL_TYPES)
   ]
 
   for (const target of targets) {

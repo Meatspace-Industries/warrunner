@@ -124,7 +124,7 @@ values are not set: `MEEPO_DISCORD_GUILD_ID` for `DISCORD_GUILD_ID`,
 `WARRUNNER_ALLOWED_ROLE_IDS`.
 
 The preflight verifies the Discord bot identity, Gateway URL, configured
-forum/home channels, Centaur health, and that `discord_thread_turn` is
+forum/home routes, Centaur health, and that `discord_thread_turn` is
 registered by the API. If `WARRUNNER_DISCORDBOT_URL` is set, preflight also
 checks `<url>/health/ready` so operators can verify the long-running Discordbot
 is ready before relying on Discord-window chat.
@@ -220,6 +220,11 @@ new setup prompt, pass `--attach`:
 pnpm --filter discordbot dogfood:session -- --attach --open --turns 12 --timeout-ms 600000 <thread-or-home-channel-id>
 pnpm --filter discordbot dogfood:chat -- --attach --timeout-ms 3600000 <thread-or-home-channel-id>
 ```
+
+Attached forum threads are routable when their parent is configured as
+`WARRUNNER_HOME_FORUM_CHANNEL_ID`; an individual long-lived thread can also be
+listed in `WARRUNNER_HOME_CHANNEL_IDS`, and preflight accepts that as a home
+route.
 
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
