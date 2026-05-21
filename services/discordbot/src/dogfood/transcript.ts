@@ -100,7 +100,13 @@ function toTranscript(
       reply: {
         channel_id: turn.reply.channelId,
         message_id: turn.reply.message.id,
-        content: turn.reply.content
+        content: turn.reply.content,
+        full_content: turn.reply.messages.map(message => message.content).join('\n'),
+        messages: turn.reply.messages.map(message => ({
+          channel_id: message.channelId,
+          message_id: message.message.id,
+          content: message.content
+        }))
       }
     })),
     ...(!result.ok

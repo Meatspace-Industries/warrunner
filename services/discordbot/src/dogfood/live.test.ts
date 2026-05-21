@@ -425,26 +425,57 @@ describe('live dogfood chat loop', () => {
   it('counts chunked Discord final-delivery replies as one live session turn', async () => {
     liveMessages = ['chunked session turn', 'after chunked reply']
     deliveryTexts = ['chunk '.repeat(500), 'second reply after chunked delivery']
-    const result = await runLiveDogfoodSession(testConfig(), {
-      channelId: 'forum-1',
-      content: 'open chunked dogfood',
-      turnLimit: 2,
-      timeoutMs: 5_000,
-      pollIntervalMs: 10
-    })
-    const formatted = formatLiveDogfoodSession(result)
+    const transcriptDir = await mkdtemp(join(tmpdir(), 'warrunner-dogfood-chunked-'))
+    try {
+      const result = await runLiveDogfoodSession(testConfig(), {
+        channelId: 'forum-1',
+        content: 'open chunked dogfood',
+        turnLimit: 2,
+        timeoutMs: 5_000,
+        pollIntervalMs: 10
+      })
+      const formatted = formatLiveDogfoodSession(result)
 
-    expect(result.ok).toBe(true)
-    expect(workflowRuns).toHaveLength(2)
-    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('chunked session turn')
-    expect(workflowRuns[1]?.body.input.parts[0].text).toBe('after chunked reply')
-    expect(discordPosts).toHaveLength(3)
-    expect(discordPosts[0]?.body.content).toStartWith('chunk')
-    expect(discordPosts[1]?.body.content).toStartWith('chunk')
-    expect(discordPosts[2]?.body.content).toBe('second reply after chunked delivery')
-    expect(delivered).toHaveLength(2)
-    expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1')
-    expect(formatted).toContain('PASS turn 2: after chunked reply -> reply-msg-3')
+      expect(result.ok).toBe(true)
+      expect(workflowRuns).toHaveLength(2)
+      expect(workflowRuns[0]?.body.input.parts[0].text).toBe('chunked session turn')
+      expect(workflowRuns[1]?.body.input.parts[0].text).toBe('after chunked reply')
+      expect(discordPosts).toHaveLength(3)
+      expect(discordPosts[0]?.body.content).toStartWith('chunk')
+      expect(discordPosts[1]?.body.content).toStartWith('chunk')
+      expect(discordPosts[2]?.body.content).toBe('second reply after chunked delivery')
+      expect(delivered).toHaveLength(2)
+      expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1')
+      expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1 (2 Discord messages)')
+      expect(formatted).toContain('PASS turn 2: after chunked reply -> reply-msg-3')
+
+      const written = await writeDogfoodTranscript({
+        command: 'session',
+        result,
+        transcriptDir,
+        now: new Date('2026-05-21T21:00:00.000Z')
+      })
+      expect(written.ok).toBe(true)
+      if (!written.ok || 'skipped' in written) throw new Error('chunked transcript was not written')
+      const transcript = JSON.parse(await readFile(written.path, 'utf8')) as any
+      expect(transcript.turns[0].reply.messages).toEqual([
+        {
+          channel_id: 'live-thread-1',
+          message_id: 'reply-msg-1',
+          content: discordPosts[0]?.body.content
+        },
+        {
+          channel_id: 'live-thread-1',
+          message_id: 'reply-msg-2',
+          content: discordPosts[1]?.body.content
+        }
+      ])
+      expect(transcript.turns[0].reply.full_content).toContain(discordPosts[0]?.body.content)
+      expect(transcript.turns[0].reply.full_content).toContain(discordPosts[1]?.body.content)
+      expect(transcript.turns[1].reply.messages).toHaveLength(1)
+    } finally {
+      await rm(transcriptDir, { recursive: true, force: true })
+    }
   })
 
   it('fails before writing when the target forum is not configured as a Warrunner route', async () => {

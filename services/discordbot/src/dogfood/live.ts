@@ -29,10 +29,14 @@ type LiveTarget = {
   setupMessage?: DiscordMessage
 }
 
-type ObservedReply = {
+type ObservedReplyMessage = {
   channelId: string
   content: string
   message: DiscordMessage
+}
+
+type ObservedReply = ObservedReplyMessage & {
+  messages: ObservedReplyMessage[]
 }
 
 type LiveDogfoodTurn = {
@@ -254,6 +258,9 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
     `PASS workflow handoff: ${result.handoff.status}`,
     `PASS normalized user text: ${result.observedEvent.parts[0]?.text ?? '(missing)'}`,
     `PASS Discord reply posted: ${result.reply.message.id}`,
+    ...(result.reply.messages.length > 1
+      ? [`PASS Discord reply messages: ${result.reply.messages.map(reply => reply.message.id).join(', ')}`]
+      : []),
     `PASS reply preview: ${result.reply.content.slice(0, 160)}`
   ].join('\n')
 }
@@ -274,7 +281,9 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
     `PASS turns completed: ${result.turns.length}`,
     ...result.turns.map((turn, index) => {
       const text = turn.observedEvent.parts[0]?.text ?? '(missing)'
-      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}`
+      const messageCount =
+        turn.reply.messages.length > 1 ? ` (${turn.reply.messages.length} Discord messages)` : ''
+      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}`
     })
   ].join('\n')
 }
@@ -335,7 +344,7 @@ class LiveTurnTracker {
 }
 
 class ObservingDiscordClient extends DiscordClient {
-  readonly observedReplies: ObservedReply[] = []
+  readonly observedReplies: ObservedReplyMessage[] = []
   replyObserverArmed = false
 
   armReplyObserver(): void {
@@ -401,7 +410,13 @@ async function waitForReply(opts: {
       const firstIndex = Math.min(...indexes)
       const lastIndex = Math.max(...indexes)
       const reply = opts.discord.observedReplies[firstIndex]
-      if (reply) return { reply, index: lastIndex }
+      if (reply) {
+        const messages = indexes
+          .sort((left, right) => left - right)
+          .map(index => opts.discord.observedReplies[index])
+          .filter(message => message !== undefined)
+        return { reply: { ...reply, messages }, index: lastIndex }
+      }
     }
     await sleep(opts.pollIntervalMs)
   }

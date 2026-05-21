@@ -155,8 +155,9 @@ Pass `--open`, or set `WARRUNNER_DOGFOOD_OPEN_DISCORD=true`, to open the printed
 Discord URL automatically when the live target is ready.
 Pass `--transcript-dir <dir>`, or set `WARRUNNER_DOGFOOD_TRANSCRIPT_DIR`, to
 write a JSON transcript containing the target URL, accepted Discord message ids,
-handoff statuses, and Discord reply ids/content. The Meatspace host wrapper
-defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`. If a
+handoff statuses, and every Discord reply id/content, including chunked final
+answers. The Meatspace host wrapper defaults this to
+`/var/lib/meepo/warrunner/dogfood-transcripts`. If a
 transcript directory is configured, live/session dogfood exits nonzero when the
 transcript cannot be written. Both the host wrapper and the direct dogfood CLI
 validate the transcript directory before Discord preflight or live chat begins.
