@@ -1,9 +1,14 @@
 name: CI
 
 on:
+  push:
+    branches:
+      - main
+      - "warrunner/**"
   pull_request:
     branches: [main]
   merge_group:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
