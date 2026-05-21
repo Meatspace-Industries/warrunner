@@ -2,6 +2,7 @@ import { centaurApiKey, homeChannelIds, loadConfig, type AppConfig } from './con
 import { DiscordApiError, DiscordClient } from './discord/client'
 import type { DiscordUser } from './discord/types'
 import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
+import { formatSmokePost, runSmokePost } from './dogfood/smoke'
 
 type Check = {
   name: string
@@ -72,10 +73,21 @@ if (import.meta.main) {
     console.log(formatEmulatedChatLoop(result))
     process.exit(result.ok ? 0 : 1)
   }
+  if (command === 'smoke') {
+    const argChannelId = process.argv[3]?.trim()
+    const channelId = argChannelId || process.env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
+    const contentArgs = argChannelId ? process.argv.slice(4) : process.argv.slice(3)
+    const result = await runSmokePost(loadConfig(), {
+      channelId,
+      content: contentArgs.join(' ')
+    })
+    console.log(formatSmokePost(result))
+    process.exit(result.ok ? 0 : 1)
+  }
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight | pnpm --filter discordbot dogfood:emulated'
+      'Usage: pnpm --filter discordbot dogfood:preflight | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- <channel-id> [message]'
     )
     process.exit(2)
   }

@@ -72,6 +72,16 @@ registered by the API.
 and returns non-200 until Discord credentials, Centaur credentials, route config,
 and bot mention identity are ready.
 
+To intentionally verify the bot can write to Discord before turning on the
+Gateway loop, post a smoke message to a text channel or existing thread:
+
+```bash
+pnpm --filter discordbot dogfood:smoke -- <channel-or-thread-id>
+```
+
+You can also set `WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID` and run
+`pnpm --filter discordbot dogfood:smoke`.
+
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
 lookup.

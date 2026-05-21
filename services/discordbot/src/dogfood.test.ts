@@ -2,12 +2,14 @@ import { afterAll, describe, expect, it } from 'bun:test'
 import { loadConfig, type AppConfig } from './config'
 import { formatPreflight, runPreflight } from './dogfood'
 import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
+import { formatSmokePost, runSmokePost } from './dogfood/smoke'
 
 const centaurAuthHeaders: string[] = []
+const smokePosts: Array<{ authorization: string; body: any }> = []
 
 const server = Bun.serve({
   port: 0,
-  fetch(request) {
+  async fetch(request) {
     const url = new URL(request.url)
     if (url.pathname === '/users/@me' && request.method === 'GET') {
       return Response.json({ id: 'bot-user', username: 'warrunner', bot: true })
@@ -30,6 +32,21 @@ const server = Bun.serve({
         name: 'warrunner-home',
         guild_id: 'guild-1'
       })
+    }
+    if (url.pathname === '/channels/smoke-1' && request.method === 'GET') {
+      return Response.json({
+        id: 'smoke-1',
+        type: 0,
+        name: 'dogfood-smoke',
+        guild_id: 'guild-1'
+      })
+    }
+    if (url.pathname === '/channels/smoke-1/messages' && request.method === 'POST') {
+      smokePosts.push({
+        authorization: request.headers.get('authorization') ?? '',
+        body: await request.json()
+      })
+      return Response.json({ id: 'smoke-msg-1', channel_id: 'smoke-1' })
     }
     if (url.pathname === '/health' && request.method === 'GET') {
       return Response.json({ status: 'ok' })
@@ -78,6 +95,37 @@ describe('dogfood preflight', () => {
     expect(failed).toContain('DISCORD_GUILD_ID')
     expect(failed).toContain('home route')
     expect(formatPreflight(result)).toContain('FAIL warrunner dogfood preflight failed')
+  })
+})
+
+describe('dogfood smoke post', () => {
+  it('posts an explicit smoke message without allowed mentions', async () => {
+    smokePosts.length = 0
+    const result = await runSmokePost(testConfig(), {
+      channelId: 'smoke-1',
+      content: 'smoke the Discord write path'
+    })
+    const formatted = formatSmokePost(result)
+
+    expect(result.ok).toBe(true)
+    expect(smokePosts).toHaveLength(1)
+    expect(smokePosts[0]).toEqual({
+      authorization: 'Bot discord-token',
+      body: {
+        content: 'smoke the Discord write path',
+        allowed_mentions: { parse: [] }
+      }
+    })
+    expect(formatted).toContain('PASS Discord smoke post: #dogfood-smoke (smoke-1)')
+  })
+
+  it('rejects direct posts to forum channels', async () => {
+    smokePosts.length = 0
+    const result = await runSmokePost(testConfig(), { channelId: 'forum-1' })
+
+    expect(result.ok).toBe(false)
+    expect(formatSmokePost(result)).toContain('channel_not_postable:guild_forum')
+    expect(smokePosts).toHaveLength(0)
   })
 })
 
