@@ -85,9 +85,11 @@ fi
 rm -rf "$host_chat_dir"
 echo "$host_chat_output"
 grep -q "Warrunner live dogfood command: chat" <<<"$host_chat_output"
-grep -q "dogfood:session" <<<"$host_chat_output"
-grep -q -- "--until-timeout" <<<"$host_chat_output"
-grep -q -- "--timeout-ms=3600000" <<<"$host_chat_output"
+grep -q "dogfood:chat" <<<"$host_chat_output"
+if grep -q -- "--until-timeout" <<<"$host_chat_output"; then
+  echo "Host chat should use dogfood:chat defaults instead of injecting session flags." >&2
+  exit 1
+fi
 grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$host_chat_output"
 echo
 echo "==> meatspace/scripts/warrunner-live-dogfood.sh session --env-file services/discordbot/.env.example --transcript-dir /dev/null/warrunner --no-open"

@@ -76,19 +76,6 @@ ensure_transcript_dir_writable() {
   rm -f "$probe"
 }
 
-passthrough_has() {
-  local candidate
-  local flag
-  for candidate in "${passthrough[@]}"; do
-    for flag in "$@"; do
-      if [[ "$candidate" == "$flag" || "$candidate" == "$flag="* ]]; then
-        return 0
-      fi
-    done
-  done
-  return 1
-}
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     preflight|smoke|live|session|chat)
@@ -152,10 +139,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 command="${command:-session}"
-dogfood_command="$command"
-if [[ "$command" == "chat" ]]; then
-  dogfood_command="session"
-fi
 case "$env_file" in
   /*) ;;
   *) env_file="$repo_root/$env_file" ;;
@@ -176,34 +159,24 @@ The Meatspace host default is /var/lib/meepo/hermes/.env.
 EOF
   exit 1
 fi
-if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && -n "$transcript_dir" ]]; then
+if [[ ( "$command" == "live" || "$command" == "session" || "$command" == "chat" ) && -n "$transcript_dir" ]]; then
   ensure_transcript_dir_writable "$transcript_dir"
 fi
 
-script="dogfood:$dogfood_command"
+script="dogfood:$command"
 dogfood_args=(--dogfood-env-file="$env_file")
-if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && -n "$transcript_dir" ]]; then
+if [[ ( "$command" == "live" || "$command" == "session" || "$command" == "chat" ) && -n "$transcript_dir" ]]; then
   dogfood_args+=(--transcript-dir="$transcript_dir")
 fi
-if [[ "$command" == "chat" ]]; then
-  if ! passthrough_has --turns --session-turns --until-timeout --until-idle --no-turn-limit; then
-    dogfood_args+=(--until-timeout)
-  fi
-  if ! passthrough_has --timeout-ms; then
-    dogfood_args+=(--timeout-ms="${WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS:-3600000}")
-  fi
-fi
-if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && "$open_discord" == 1 && "$open_explicit" == 0 ]]; then
+if [[ ( "$command" == "live" || "$command" == "session" ) && "$open_discord" == 1 && "$open_explicit" == 0 ]]; then
   dogfood_args+=(--open)
 fi
 
 cd "$repo_root"
 echo "==> Warrunner live dogfood command: $command"
-if [[ "$command" != "$dogfood_command" ]]; then
-  echo "==> Warrunner dogfood script: $script"
-fi
+echo "==> Warrunner dogfood script: $script"
 echo "==> Warrunner dogfood env file: $env_file"
-if [[ ( "$dogfood_command" == "live" || "$dogfood_command" == "session" ) && -n "$transcript_dir" ]]; then
+if [[ ( "$command" == "live" || "$command" == "session" || "$command" == "chat" ) && -n "$transcript_dir" ]]; then
   echo "==> Warrunner dogfood transcript dir: $transcript_dir"
 fi
 exec pnpm --filter discordbot "$script" -- "${dogfood_args[@]}" "${passthrough[@]+"${passthrough[@]}"}"

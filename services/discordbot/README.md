@@ -89,10 +89,10 @@ just warrunner-live-dogfood preflight
 just warrunner-live-dogfood chat
 ```
 
-`chat` is the one-command Discord-window loop: it runs `dogfood:session`,
-opens Discord by default, uses transcripts, and adds `--until-timeout
---timeout-ms=3600000` unless you pass an explicit turn or timeout setting. To
-pass an explicit target channel, forum, thread, or home channel id:
+`chat` is the one-command Discord-window loop: it runs `dogfood:chat`, opens
+Discord by default, uses transcripts, keeps accepting turns until idle timeout,
+and uses `WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS` or one hour as its default
+timeout. To pass an explicit target channel, forum, thread, or home channel id:
 
 ```bash
 just warrunner-live-dogfood chat -- <channel-or-forum-id>
