@@ -109,8 +109,9 @@ only passes after a Discord reply is posted. The target must be configured as a
 Warrunner home forum, home channel, or intake channel; unroutable targets fail
 before any Discord post is created. If no channel id is passed, it uses
 `WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID`, then the configured home forum/home
-channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to change the default
-180-second wait.
+channel. When the target is ready, the command prints a direct Discord URL for
+the created thread or home channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to
+change the default 180-second wait.
 
 For iterative dogfooding from the Discord window, run a short live session:
 
@@ -120,7 +121,8 @@ pnpm --filter discordbot dogfood:session -- <channel-or-forum-id>
 
 This uses the same setup as `dogfood:live`, but waits for multiple Discord
 messages and prints each accepted message plus the Discord reply id. It defaults
-to three turns; set `WARRUNNER_DOGFOOD_SESSION_TURNS` to change that count.
+to three turns; set `WARRUNNER_DOGFOOD_SESSION_TURNS` to change that count. Use
+the printed Discord URL as the window to keep chatting with Warrunner.
 
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup

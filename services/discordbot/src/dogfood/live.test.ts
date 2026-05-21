@@ -21,7 +21,10 @@ const delivered: CapturedRequest[] = []
 const pendingDeliveries: any[] = []
 
 let activeGateway: any = null
-let liveThreadCreated = false
+let liveTargetReady = false
+let liveConversationChannelId = 'live-thread-1'
+let liveParentChannelId: string | undefined = 'forum-1'
+let liveDispatchThreadCreate = true
 let liveMessageCursor = 0
 let liveMessages: string[] = []
 let deliveryTexts: string[] = []
@@ -50,7 +53,10 @@ const server = Bun.serve({
     if (url.pathname === '/channels/forum-1/threads' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
       forumThreads.push(captured)
-      liveThreadCreated = true
+      liveTargetReady = true
+      liveConversationChannelId = 'live-thread-1'
+      liveParentChannelId = 'forum-1'
+      liveDispatchThreadCreate = true
       setTimeout(sendLiveDiscordMessage, 10)
       return Response.json({
         id: 'live-thread-1',
@@ -66,6 +72,14 @@ const server = Bun.serve({
           author: { id: 'bot-user', bot: true },
           attachments: []
         }
+      })
+    }
+    if (url.pathname === '/channels/home-1' && request.method === 'GET') {
+      return Response.json({
+        id: 'home-1',
+        type: 0,
+        name: 'warrunner-home',
+        guild_id: 'guild-1'
       })
     }
     if (url.pathname === '/channels/live-thread-1/messages' && request.method === 'GET') {
@@ -85,19 +99,36 @@ const server = Bun.serve({
       setTimeout(sendLiveDiscordMessage, 10)
       return Response.json({ id: `reply-msg-${discordPosts.length}`, channel_id: 'live-thread-1' })
     }
+    if (url.pathname === '/channels/home-1/messages' && request.method === 'GET') {
+      return Response.json([
+        {
+          id: 'home-hist-1',
+          channel_id: 'home-1',
+          guild_id: 'guild-1',
+          content: 'home channel context',
+          author: { id: 'bot-user', bot: true },
+          attachments: []
+        }
+      ])
+    }
+    if (url.pathname === '/channels/home-1/messages' && request.method === 'POST') {
+      const captured = await capture(request, url.pathname)
+      discordPosts.push(captured)
+      liveTargetReady = true
+      liveConversationChannelId = 'home-1'
+      liveParentChannelId = undefined
+      liveDispatchThreadCreate = false
+      setTimeout(sendLiveDiscordMessage, 10)
+      return Response.json({ id: `home-msg-${discordPosts.length}`, channel_id: 'home-1' })
+    }
     if (url.pathname === '/workflows/runs' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
       workflowRuns.push(captured)
       const runIndex = workflowRuns.length
       pendingDeliveries.push({
         execution_id: `exec-${runIndex}`,
-        thread_key: 'discord:guild-1:forum-1:live-thread-1',
-        delivery: {
-          platform: 'discord',
-          guild_id: 'guild-1',
-          channel_id: 'live-thread-1',
-          thread_id: 'live-thread-1'
-        },
+        thread_key: captured.body.input.thread_key,
+        delivery: captured.body.input.delivery,
         final_payload: {
           result_text: deliveryTexts[runIndex - 1] ?? `live dogfood final answer ${runIndex}`
         }
@@ -143,7 +174,10 @@ beforeEach(() => {
   delivered.length = 0
   pendingDeliveries.length = 0
   activeGateway = null
-  liveThreadCreated = false
+  liveTargetReady = false
+  liveConversationChannelId = 'live-thread-1'
+  liveParentChannelId = 'forum-1'
+  liveDispatchThreadCreate = true
   liveMessageCursor = 0
   liveMessages = ['live dogfood from Discord']
   deliveryTexts = ['live dogfood final answer']
@@ -211,6 +245,73 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS live Discord chat loop completed')
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
+  })
+
+  it('runs live dogfood in a configured home channel with a bot mention', async () => {
+    const progress: string[] = []
+    const result = await runLiveDogfood(
+      testConfig({
+        WARRUNNER_HOME_FORUM_CHANNEL_ID: '',
+        WARRUNNER_HOME_CHANNEL_IDS: 'home-1',
+        WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED: 'true'
+      }),
+      {
+        channelId: 'home-1',
+        content: 'open home dogfood',
+        timeoutMs: 5_000,
+        pollIntervalMs: 10,
+        onProgress: line => progress.push(line)
+      }
+    )
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect(forumThreads).toHaveLength(0)
+    expect(workflowRuns[0]).toMatchObject({
+      path: '/workflows/runs',
+      authorization: 'Bearer centaur-key',
+      body: {
+        workflow_name: 'discord_thread_turn',
+        input: {
+          thread_key: 'discord:guild-1:home-1:home-1',
+          message_id: 'discord:guild-1:home-1:live-msg-1',
+          delivery: {
+            platform: 'discord',
+            guild_id: 'guild-1',
+            channel_id: 'home-1',
+            thread_id: 'home-1'
+          }
+        }
+      }
+    })
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('live dogfood from Discord')
+    expect(workflowRuns[0]?.body.input.metadata.discord.is_mention).toBe(true)
+    expect(discordPosts).toHaveLength(2)
+    expect(discordPosts[0]).toMatchObject({
+      path: '/channels/home-1/messages',
+      authorization: 'Bot discord-token',
+      body: {
+        content: 'open home dogfood',
+        allowed_mentions: { parse: [] }
+      }
+    })
+    expect(discordPosts[1]).toMatchObject({
+      path: '/channels/home-1/messages',
+      authorization: 'Bot discord-token',
+      body: {
+        content: 'live dogfood final answer',
+        allowed_mentions: { parse: [] }
+      }
+    })
+    expect(delivered).toHaveLength(1)
+    expect(result.target.createdThread).toBeUndefined()
+    expect(result.target.discordUrl).toBe('https://discord.com/channels/guild-1/home-1')
+    expect(progress.some(line => line.includes('PASS live target ready'))).toBe(true)
+    expect(progress.some(line => line.includes('https://discord.com/channels/guild-1/home-1'))).toBe(true)
+    expect(formatted).toContain('PASS live Discord chat loop completed')
+    expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/home-1')
+    expect(formatted).toContain('PASS Discord reply posted: home-msg-2')
   })
 
   it('keeps a live session open for multiple Discord turns', async () => {
@@ -288,24 +389,26 @@ describe('live dogfood chat loop', () => {
 })
 
 function sendLiveDiscordMessage(): void {
-  if (!activeGateway || !liveThreadCreated) return
+  if (!activeGateway || !liveTargetReady) return
   const content = liveMessages[liveMessageCursor]
   if (!content) return
   const messageIndex = liveMessageCursor + 1
   liveMessageCursor += 1
-  activeGateway.send(
-    JSON.stringify({
-      op: 0,
-      t: 'THREAD_CREATE',
-      s: messageIndex * 2 - 1,
-      d: {
-        id: 'live-thread-1',
-        type: 11,
-        guild_id: 'guild-1',
-        parent_id: 'forum-1'
-      }
-    })
-  )
+  if (liveDispatchThreadCreate) {
+    activeGateway.send(
+      JSON.stringify({
+        op: 0,
+        t: 'THREAD_CREATE',
+        s: messageIndex * 2 - 1,
+        d: {
+          id: liveConversationChannelId,
+          type: 11,
+          guild_id: 'guild-1',
+          parent_id: liveParentChannelId
+        }
+      })
+    )
+  }
   activeGateway.send(
     JSON.stringify({
       op: 0,
@@ -313,7 +416,7 @@ function sendLiveDiscordMessage(): void {
       s: messageIndex * 2,
       d: {
         id: `live-msg-${messageIndex}`,
-        channel_id: 'live-thread-1',
+        channel_id: liveConversationChannelId,
         guild_id: 'guild-1',
         content: `<@bot-user> ${content}`,
         author: { id: 'user-1' },
