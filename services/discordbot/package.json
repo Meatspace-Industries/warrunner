@@ -19,7 +19,6 @@
     "check:types": "bun tsgo --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@std/ulid": "npm:@jsr/std__ulid",
     "hono": "^4.12.18",
     "zod": "^4.4.3"
   },

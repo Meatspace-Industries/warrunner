@@ -1,4 +1,3 @@
-import { ulid } from '@std/ulid'
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { prettyJSON } from 'hono/pretty-json'
 import { requestId } from 'hono/request-id'
@@ -55,7 +54,7 @@ export const app = new Hono<{ Variables: Variables }>()
   .use(
     requestId({
       headerName: 'X-Discordbot-Request-ID',
-      generator: () => ulid()
+      generator: () => crypto.randomUUID()
     })
   )
 

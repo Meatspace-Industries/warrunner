@@ -35,9 +35,6 @@ importers:
 
   services/discordbot:
     dependencies:
-      '@std/ulid':
-        specifier: npm:@jsr/std__ulid
-        version: '@jsr/std__ulid@1.0.0-rc.4'
       hono:
         specifier: ^4.12.18
         version: 4.12.19
