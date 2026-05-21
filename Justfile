@@ -62,6 +62,9 @@ _build-agent:
 warrunner-dogfood-gates *args:
     meatspace/scripts/warrunner-dogfood-gates.sh {{args}}
 
+warrunner-live-dogfood *args:
+    meatspace/scripts/warrunner-live-dogfood.sh {{args}}
+
 bootstrap-secrets *args:
     contrib/scripts/bootstrap-k8s-secrets.sh --namespace {{namespace}} {{args}}
 

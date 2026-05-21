@@ -76,7 +76,22 @@ pnpm --filter discordbot dogfood:preflight
 ```
 
 To dogfood against an existing Meatspace host environment without copying
-secrets into the repo, point the dogfood CLI at the host env file:
+secrets into the repo, use the host wrapper. It defaults to
+`/var/lib/meepo/hermes/.env`, runs from the repo root, and opens the Discord
+target automatically for live/session commands:
+
+```bash
+just warrunner-live-dogfood preflight
+just warrunner-live-dogfood session
+```
+
+To pass an explicit target channel or forum id:
+
+```bash
+just warrunner-live-dogfood session -- <channel-or-forum-id>
+```
+
+The lower-level dogfood CLI can also be pointed at the host env file directly:
 
 ```bash
 pnpm --filter discordbot dogfood:preflight -- --dogfood-env-file=/var/lib/meepo/hermes/.env
