@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { DiscordGatewayPayload } from '../discord/types'
 
-setDefaultTimeout(15_000)
+setDefaultTimeout(30_000)
 
 type CapturedRequest = {
   path: string
@@ -458,6 +458,94 @@ describe('dogfood CLI live session', () => {
       await rm(tmp, { recursive: true, force: true })
     }
   })
+
+  it('runs the Meatspace host wrapper chat path against an attached Discord thread', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'warrunner-host-chat-'))
+    const envFile = join(tmp, '.env')
+    const transcriptDir = join(tmp, 'transcripts')
+    liveMessages = ['host wrapper chat turn', 'host wrapper chat followup']
+    try {
+      await writeFile(
+        envFile,
+        [
+          `DISCORD_API_URL=${fakeBaseUrl}`,
+          `CENTAUR_API_URL=${fakeBaseUrl}`,
+          'DISCORD_BOT_TOKEN=discord-token',
+          'DISCORDBOT_API_KEY=centaur-key',
+          'DISCORD_GATEWAY_ENABLED=true',
+          'DISCORD_GUILD_ID=guild-1',
+          'DISCORD_BOT_USER_ID=bot-user',
+          'WARRUNNER_HOME_FORUM_CHANNEL_ID=forum-1',
+          'WARRUNNER_HOME_CHANNEL_ID=',
+          'WARRUNNER_HOME_CHANNEL_IDS=',
+          'WARRUNNER_INTAKE_CHANNEL_IDS=',
+          'DISCORD_FREE_RESPONSE_CHANNELS=',
+          'WARRUNNER_ALLOWED_ROLE_IDS=',
+          'MEEPO_ALLOWED_ROLE_IDS=',
+          'DISCORD_ALLOWED_ROLES=',
+          'WARRUNNER_DISCORDBOT_URL=',
+          'WARRUNNER_HISTORY_LIMIT=10'
+        ].join('\n')
+      )
+
+      const result = await runHostDogfoodScript([
+        'chat',
+        '--env-file',
+        envFile,
+        '--transcript-dir',
+        transcriptDir,
+        '--no-open',
+        '--',
+        '--attach',
+        '--turns=2',
+        '--operator-user-id=user-1',
+        '--poll-interval-ms=10',
+        '--timeout-ms=5000',
+        'live-thread-1'
+      ])
+
+      expect(result.exitCode, `${result.stderr}\n${result.stdout}`).toBe(0)
+      expect(result.stdout).toContain('==> Warrunner live dogfood command: chat')
+      expect(result.stdout).toContain('==> Warrunner dogfood script: dogfood:chat')
+      expect(result.stdout).not.toContain('--until-timeout')
+      expect(result.stdout).toContain('PASS warrunner dogfood preflight passed')
+      expect(result.stdout).toContain('PASS live Discord dogfood chat completed')
+      expect(result.stdout).toContain('PASS turns completed: 2')
+      expect(result.stdout).toContain('PASS turn 1: host wrapper chat turn -> reply-msg-1')
+      expect(result.stdout).toContain('PASS turn 2: host wrapper chat followup -> reply-msg-2')
+      expect(forumThreadCreates).toHaveLength(0)
+      expect(workflowRuns.map(run => run.body.input.parts[0].text)).toEqual([
+        'host wrapper chat turn',
+        'host wrapper chat followup'
+      ])
+      expect(discordPosts.map(post => post.body.message_reference?.message_id)).toEqual([
+        'live-msg-1',
+        'live-msg-2'
+      ])
+
+      const transcripts = await readdir(transcriptDir)
+      expect(transcripts).toHaveLength(1)
+      expect(transcripts[0]).toContain('chat')
+      expect(transcripts[0]).toContain('pass')
+      const transcriptText = await readFile(join(transcriptDir, transcripts[0] ?? ''), 'utf8')
+      const transcript = JSON.parse(transcriptText) as any
+      expect(transcript).toMatchObject({
+        command: 'chat',
+        ok: true,
+        stop_reason: 'turn_limit',
+        target: {
+          requested_channel_id: 'live-thread-1',
+          conversation_channel_id: 'live-thread-1',
+          operator_user_id: 'user-1',
+          discord_url: 'https://discord.com/channels/guild-1/live-thread-1'
+        }
+      })
+      expect(transcriptText).not.toContain('discord-token')
+      expect(transcriptText).not.toContain('centaur-key')
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
 })
 
 async function runDogfoodCli(args: string[]): Promise<{
@@ -469,6 +557,38 @@ async function runDogfoodCli(args: string[]): Promise<{
     [process.execPath, fileURLToPath(new URL('../dogfood.ts', import.meta.url)), ...args],
     {
       cwd: fileURLToPath(new URL('../..', import.meta.url)),
+      env: {
+        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+        ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+        NO_COLOR: '1'
+      },
+      stdout: 'pipe',
+      stderr: 'pipe'
+    }
+  )
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited
+  ])
+  return { exitCode, stdout, stderr }
+}
+
+async function runHostDogfoodScript(args: string[]): Promise<{
+  exitCode: number
+  stdout: string
+  stderr: string
+}> {
+  const proc = Bun.spawn(
+    [
+      fileURLToPath(
+        new URL('../../../../meatspace/scripts/warrunner-live-dogfood.sh', import.meta.url)
+      ),
+      ...args
+    ],
+    {
+      cwd: fileURLToPath(new URL('../../../..', import.meta.url)),
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
