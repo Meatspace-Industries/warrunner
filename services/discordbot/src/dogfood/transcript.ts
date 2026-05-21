@@ -99,6 +99,7 @@ function toTranscript(
         status: turn.handoff.status
       },
       reply: {
+        source: turn.reply.source,
         channel_id: turn.reply.channelId,
         message_id: turn.reply.message.id,
         content: turn.reply.content,

@@ -40,6 +40,7 @@ type ObservedReplyMessage = {
 
 type ObservedReply = ObservedReplyMessage & {
   messages: ObservedReplyMessage[]
+  source: 'final_delivery' | 'channel_history'
 }
 
 type LiveDogfoodTurn = {
@@ -286,6 +287,7 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
     ...(result.reply.messages.length > 1
       ? [`PASS Discord reply messages: ${result.reply.messages.map(reply => reply.message.id).join(', ')}`]
       : []),
+    `PASS Discord reply source: ${result.reply.source}`,
     `PASS reply preview: ${result.reply.content.slice(0, 160)}`
   ].join('\n')
 }
@@ -309,7 +311,7 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
       const messageCount =
         turn.reply.messages.length > 1 ? ` (${turn.reply.messages.length} Discord messages)` : ''
       const execution = turn.executionId ? ` [${turn.executionId}]` : ''
-      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}${execution}`
+      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}${execution} via ${turn.reply.source}`
     })
   ].join('\n')
 }
@@ -463,7 +465,7 @@ async function waitForReply(opts: {
           .sort((left, right) => left - right)
           .map(index => opts.discord.observedReplies[index])
           .filter(message => message !== undefined)
-        return { reply: { ...reply, messages }, index: lastIndex }
+        return { reply: { ...reply, messages, source: 'final_delivery' }, index: lastIndex }
       }
     }
 
@@ -504,7 +506,7 @@ async function observeBotReplyFromDiscord(opts: {
 
   const first = replies[0]
   if (!first) return undefined
-  return { ...first, messages: replies }
+  return { ...first, messages: replies, source: 'channel_history' }
 }
 
 function handoffExecutionId(result: CentaurHandoffResult): string | undefined {

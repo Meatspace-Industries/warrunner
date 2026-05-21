@@ -341,6 +341,7 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS live Discord chat loop completed')
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
+    expect(formatted).toContain('PASS Discord reply source: final_delivery')
   })
 
   it('runs live dogfood in a configured home channel with a bot mention', async () => {
@@ -433,7 +434,7 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS live Discord dogfood session completed')
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS turns completed: 2')
-    expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
+    expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2 [exec-2] via final_delivery')
   })
 
   it('attaches to an existing forum thread without posting a setup prompt', async () => {
@@ -541,7 +542,9 @@ describe('live dogfood chat loop', () => {
     expect(delivered).toHaveLength(0)
     expect(result.reply.message.id).toBe('external-reply-1')
     expect(result.reply.content).toBe('externally posted final answer')
+    expect(result.reply.source).toBe('channel_history')
     expect(formatted).toContain('PASS Discord reply posted: external-reply-1')
+    expect(formatted).toContain('PASS Discord reply source: channel_history')
   })
 
   it('does not count a locally posted stale execution as an external bot reply', async () => {
@@ -605,7 +608,11 @@ describe('live dogfood chat loop', () => {
             execution_id: 'exec-1',
             text: 'first transcript turn',
             handoff: { ok: true, status: 200 },
-            reply: { channel_id: 'live-thread-1', message_id: 'reply-msg-1' }
+            reply: {
+              source: 'final_delivery',
+              channel_id: 'live-thread-1',
+              message_id: 'reply-msg-1'
+            }
           },
           {
             index: 2,
@@ -613,7 +620,11 @@ describe('live dogfood chat loop', () => {
             execution_id: 'exec-2',
             text: 'second transcript turn',
             handoff: { ok: true, status: 200 },
-            reply: { channel_id: 'live-thread-1', message_id: 'reply-msg-2' }
+            reply: {
+              source: 'final_delivery',
+              channel_id: 'live-thread-1',
+              message_id: 'reply-msg-2'
+            }
           }
         ]
       })
@@ -648,8 +659,10 @@ describe('live dogfood chat loop', () => {
       expect(discordPosts[2]?.body.content).toBe('second reply after chunked delivery')
       expect(delivered).toHaveLength(2)
       expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1')
-      expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1 (2 Discord messages)')
-      expect(formatted).toContain('PASS turn 2: after chunked reply -> reply-msg-3')
+      expect(formatted).toContain(
+        'PASS turn 1: chunked session turn -> reply-msg-1 (2 Discord messages) [exec-1] via final_delivery'
+      )
+      expect(formatted).toContain('PASS turn 2: after chunked reply -> reply-msg-3 [exec-2] via final_delivery')
 
       const written = await writeDogfoodTranscript({
         command: 'session',
