@@ -28,6 +28,12 @@ const pendingDeliveries: any[] = []
 const createdDiscordMessages: any[] = []
 const externalDiscordReplies: any[] = []
 const historyDiscordMessages: any[] = []
+const preludeGatewayMessages: Array<{
+  id: string
+  channelId: string
+  parentChannelId?: string
+  content: string
+}> = []
 
 let activeGateway: any = null
 let liveTargetReady = false
@@ -72,6 +78,7 @@ const server = Bun.serve({
       liveConversationChannelId = 'live-thread-1'
       liveParentChannelId = 'forum-1'
       liveDispatchThreadCreate = true
+      for (const message of preludeGatewayMessages) scheduleGatewayUserMessage(message)
       scheduleLiveDiscordMessage()
       return Response.json({
         id: 'live-thread-1',
@@ -253,6 +260,7 @@ beforeEach(() => {
   createdDiscordMessages.length = 0
   externalDiscordReplies.length = 0
   historyDiscordMessages.length = 0
+  preludeGatewayMessages.length = 0
   activeGateway = null
   liveTargetReady = false
   liveConversationChannelId = 'live-thread-1'
@@ -363,6 +371,38 @@ describe('live dogfood chat loop', () => {
       'PASS Discord reply URL: https://discord.com/channels/guild-1/live-thread-1/reply-msg-1'
     )
     expect(formatted).toContain('PASS Discord reply source: final_delivery')
+  })
+
+  it('ignores Gateway messages from sibling forum threads while waiting for the target thread', async () => {
+    preludeGatewayMessages.push({
+      id: 'sibling-msg-1',
+      channelId: 'sibling-thread-1',
+      parentChannelId: 'forum-1',
+      content: 'wrong sibling thread turn'
+    })
+    liveMessages = ['target thread turn']
+
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open isolated target dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect(workflowRuns).toHaveLength(1)
+    expect(workflowRuns[0]?.body.input).toMatchObject({
+      thread_key: 'discord:guild-1:forum-1:live-thread-1',
+      message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+      delivery: {
+        thread_id: 'live-thread-1',
+        message_id: 'live-msg-1'
+      }
+    })
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('target thread turn')
+    expect(discordPosts[0]?.path).toBe('/channels/live-thread-1/messages')
+    expect(discordPosts[0]?.body.message_reference?.message_id).toBe('live-msg-1')
   })
 
   it('runs live dogfood in a configured home channel with a bot mention', async () => {
@@ -982,11 +1022,65 @@ function sendLiveDiscordMessage(): LiveDiscordSendResult {
   return 'sent'
 }
 
+function sendGatewayUserMessage(opts: {
+  id: string
+  channelId: string
+  parentChannelId?: string
+  content: string
+}): LiveDiscordSendResult {
+  if (!activeGateway) return 'not_ready'
+  if (!opts.content.trim()) return 'empty'
+  if (opts.parentChannelId) {
+    activeGateway.send(
+      JSON.stringify({
+        op: 0,
+        t: 'THREAD_CREATE',
+        s: 8_000,
+        d: {
+          id: opts.channelId,
+          type: 11,
+          guild_id: 'guild-1',
+          parent_id: opts.parentChannelId
+        }
+      })
+    )
+  }
+  activeGateway.send(
+    JSON.stringify({
+      op: 0,
+      t: 'MESSAGE_CREATE',
+      s: 8_001,
+      d: {
+        id: opts.id,
+        channel_id: opts.channelId,
+        guild_id: 'guild-1',
+        content: `<@bot-user> ${opts.content}`,
+        author: { id: 'user-1' },
+        mentions: [{ id: 'bot-user' }],
+        attachments: []
+      }
+    })
+  )
+  return 'sent'
+}
+
 function scheduleLiveDiscordMessage(attempts = 500): void {
   const timer = setTimeout(() => {
     liveMessageTimers = liveMessageTimers.filter(item => item !== timer)
     const result = sendLiveDiscordMessage()
     if (result === 'not_ready' && attempts > 0) scheduleLiveDiscordMessage(attempts - 1)
+  }, 10)
+  liveMessageTimers.push(timer)
+}
+
+function scheduleGatewayUserMessage(
+  opts: { id: string; channelId: string; parentChannelId?: string; content: string },
+  attempts = 500
+): void {
+  const timer = setTimeout(() => {
+    liveMessageTimers = liveMessageTimers.filter(item => item !== timer)
+    const result = sendGatewayUserMessage(opts)
+    if (result === 'not_ready' && attempts > 0) scheduleGatewayUserMessage(opts, attempts - 1)
   }, 10)
   liveMessageTimers.push(timer)
 }

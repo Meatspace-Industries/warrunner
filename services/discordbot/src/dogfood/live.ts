@@ -202,18 +202,25 @@ export async function runLiveDogfoodSession(
       }
     }
 
-    const targetId = () => target?.conversationChannelId ?? requestedChannelId
     const tracker = new LiveTurnTracker()
     const channels = new DiscordChannelResolver(discord)
+    const pendingLiveMessages: DiscordMessage[] = []
     const handoff = new ObservingHandoff(
       config,
-      event => event.channel_id === targetId() || event.parent_channel_id === requestedChannelId,
+      event => Boolean(target && event.channel_id === target.conversationChannelId),
       value => {
         tracker.accept(value)
       }
     )
     const processMessage = createDiscordMessageProcessor({ config, discord, channels, handoff })
-    const processLiveMessage = dedupeDiscordMessageProcessor(processMessage)
+    const processLiveMessage = dedupeDiscordMessageProcessor(message => {
+      if (!target) {
+        pendingLiveMessages.push(message)
+        return Promise.resolve()
+      }
+      if (message.channel_id !== target.conversationChannelId) return Promise.resolve()
+      return processMessage(message)
+    })
     gatewayHandle = startLiveGateway(config, discord, channels, processLiveMessage)
     if (!gatewayHandle) {
       return {
@@ -252,6 +259,7 @@ export async function runLiveDogfoodSession(
       }
       target = targetFromSmoke(config, requestedChannelId, setup)
     }
+    await drainPendingLiveMessages(pendingLiveMessages, target, processMessage)
     const historyIntakeSeenMessageIds = new Set<string>()
     let historyCursor = target.setupMessage?.id ?? (await latestMessageId(discord, target.conversationChannelId))
     opts.onProgress?.(formatLiveTarget(target, botUser.id, timeoutMs))
@@ -432,8 +440,11 @@ class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
   }
 
   override async emit(event: NormalizedDiscordEvent): Promise<CentaurHandoffResult> {
+    if (!this.isTarget(event)) {
+      return { ok: true, status: 204, body: { skipped: 'live_non_target_discord_event' } }
+    }
     const result = await super.emit(event)
-    if (result.ok && this.isTarget(event)) {
+    if (result.ok) {
       const executionId = handoffExecutionId(result)
       this.onAccepted({ event, handoff: result, ...(executionId ? { executionId } : {}) })
     }
@@ -562,6 +573,18 @@ function dedupeDiscordMessageProcessor(
     if (!message.id) return
     if (seenMessageIds.has(message.id)) return
     seenMessageIds.add(message.id)
+    await processMessage(message)
+  }
+}
+
+async function drainPendingLiveMessages(
+  pending: DiscordMessage[],
+  target: LiveTarget,
+  processMessage: (message: DiscordMessage) => Promise<void>
+): Promise<void> {
+  const messages = pending.splice(0, pending.length)
+  for (const message of messages) {
+    if (message.channel_id !== target.conversationChannelId) continue
     await processMessage(message)
   }
 }
