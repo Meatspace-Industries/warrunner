@@ -42,6 +42,7 @@ type ObservedReply = ObservedReplyMessage & {
 type LiveDogfoodTurn = {
   observedEvent: NormalizedDiscordEvent
   handoff: CentaurHandoffResult
+  executionId?: string
   reply: ObservedReply
 }
 
@@ -51,6 +52,7 @@ export type LiveDogfoodResult =
       target: LiveTarget
       observedEvent: NormalizedDiscordEvent
       handoff: CentaurHandoffResult
+      executionId?: string
       reply: ObservedReply
     }
   | {
@@ -107,6 +109,7 @@ export async function runLiveDogfood(
     target: result.target,
     observedEvent: turn.observedEvent,
     handoff: turn.handoff,
+    ...(turn.executionId ? { executionId: turn.executionId } : {}),
     reply: turn.reply
   }
 }
@@ -212,6 +215,7 @@ export async function runLiveDogfoodSession(
         config,
         discord,
         channelId: accepted.event.channel_id,
+        executionId: accepted.executionId,
         fromIndex: replyCursor,
         timeoutMs: remainingTimeout(timeoutMs, startedAt),
         pollIntervalMs
@@ -221,6 +225,7 @@ export async function runLiveDogfoodSession(
       turns.push({
         observedEvent: accepted.event,
         handoff: accepted.handoff,
+        ...(accepted.executionId ? { executionId: accepted.executionId } : {}),
         reply: observedReply.reply
       })
     }
@@ -256,6 +261,7 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
     `PASS target: ${target}`,
     ...(result.target.discordUrl ? [`PASS Discord URL: ${result.target.discordUrl}`] : []),
     `PASS workflow handoff: ${result.handoff.status}`,
+    ...(result.executionId ? [`PASS workflow execution: ${result.executionId}`] : []),
     `PASS normalized user text: ${result.observedEvent.parts[0]?.text ?? '(missing)'}`,
     `PASS Discord reply posted: ${result.reply.message.id}`,
     ...(result.reply.messages.length > 1
@@ -283,7 +289,8 @@ export function formatLiveDogfoodSession(result: LiveDogfoodSessionResult): stri
       const text = turn.observedEvent.parts[0]?.text ?? '(missing)'
       const messageCount =
         turn.reply.messages.length > 1 ? ` (${turn.reply.messages.length} Discord messages)` : ''
-      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}`
+      const execution = turn.executionId ? ` [${turn.executionId}]` : ''
+      return `PASS turn ${index + 1}: ${text} -> ${turn.reply.message.id}${messageCount}${execution}`
     })
   ].join('\n')
 }
@@ -293,12 +300,17 @@ class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
   readonly onAccepted: (value: {
     event: NormalizedDiscordEvent
     handoff: CentaurHandoffResult
+    executionId?: string
   }) => void
 
   constructor(
     config: AppConfig,
     isTarget: (event: NormalizedDiscordEvent) => boolean,
-    onAccepted: (value: { event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }) => void
+    onAccepted: (value: {
+      event: NormalizedDiscordEvent
+      handoff: CentaurHandoffResult
+      executionId?: string
+    }) => void
   ) {
     super(config)
     this.isTarget = isTarget
@@ -308,17 +320,26 @@ class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
   override async emit(event: NormalizedDiscordEvent): Promise<CentaurHandoffResult> {
     const result = await super.emit(event)
     if (result.ok && this.isTarget(event)) {
-      this.onAccepted({ event, handoff: result })
+      const executionId = handoffExecutionId(result)
+      this.onAccepted({ event, handoff: result, ...(executionId ? { executionId } : {}) })
     }
     return result
   }
 }
 
 class LiveTurnTracker {
-  readonly accepted: Array<{ event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }> = []
+  readonly accepted: Array<{
+    event: NormalizedDiscordEvent
+    handoff: CentaurHandoffResult
+    executionId?: string
+  }> = []
   readonly waiters: Array<() => void> = []
 
-  accept(value: { event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }): void {
+  accept(value: {
+    event: NormalizedDiscordEvent
+    handoff: CentaurHandoffResult
+    executionId?: string
+  }): void {
     this.accepted.push(value)
     const waiters = this.waiters.splice(0)
     for (const resolve of waiters) resolve()
@@ -328,7 +349,11 @@ class LiveTurnTracker {
     index: number,
     timeoutMs: number,
     timeoutMessage: string
-  ): Promise<{ event: NormalizedDiscordEvent; handoff: CentaurHandoffResult }> {
+  ): Promise<{
+    event: NormalizedDiscordEvent
+    handoff: CentaurHandoffResult
+    executionId?: string
+  }> {
     if (this.accepted[index]) return this.accepted[index]
     await withTimeout(
       new Promise<void>(resolve => {
@@ -385,6 +410,7 @@ async function waitForReply(opts: {
   config: AppConfig
   discord: ObservingDiscordClient
   channelId: string
+  executionId?: string
   fromIndex: number
   timeoutMs: number
   pollIntervalMs: number
@@ -393,6 +419,7 @@ async function waitForReply(opts: {
   while (Date.now() - started < opts.timeoutMs) {
     const deliveryResult = await pollFinalDeliveriesOnce(opts.config, opts.discord)
     for (const delivery of deliveryResult.delivered) {
+      if (opts.executionId && delivery.executionId !== opts.executionId) continue
       const messageIds = delivery.messages
         .filter(message => message.channel_id === opts.channelId)
         .map(message => message.id)
@@ -421,6 +448,12 @@ async function waitForReply(opts: {
     await sleep(opts.pollIntervalMs)
   }
   throw new Error(`timed out waiting for a Discord final-delivery reply in ${opts.channelId}`)
+}
+
+function handoffExecutionId(result: CentaurHandoffResult): string | undefined {
+  if (!result.ok || !isRecord(result.body)) return undefined
+  const value = result.body.execution_id
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function selectTargetChannelId(config: AppConfig, channelId: string | undefined): string | undefined {
@@ -567,6 +600,10 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
     if (trimmed) return trimmed
   }
   return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function sleep(ms: number): Promise<void> {

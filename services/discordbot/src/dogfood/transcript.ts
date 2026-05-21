@@ -93,6 +93,7 @@ function toTranscript(
         : {}),
       user_id: turn.observedEvent.user_id,
       text: turn.observedEvent.parts.map(part => part.text).join('\n'),
+      ...(turn.executionId ? { execution_id: turn.executionId } : {}),
       handoff: {
         ok: turn.handoff.ok,
         status: turn.handoff.status
@@ -128,6 +129,7 @@ function resultTurns(
         {
           observedEvent: result.observedEvent,
           handoff: result.handoff,
+          ...(result.executionId ? { executionId: result.executionId } : {}),
           reply: result.reply
         }
       ]

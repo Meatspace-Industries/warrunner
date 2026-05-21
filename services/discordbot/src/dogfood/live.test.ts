@@ -34,6 +34,7 @@ let liveDispatchThreadCreate = true
 let liveMessageCursor = 0
 let liveMessages: string[] = []
 let deliveryTexts: string[] = []
+let injectStaleDeliveryBeforeNext = false
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 
 const server = Bun.serve({
@@ -132,6 +133,17 @@ const server = Bun.serve({
       const captured = await capture(request, url.pathname)
       workflowRuns.push(captured)
       const runIndex = workflowRuns.length
+      if (injectStaleDeliveryBeforeNext) {
+        injectStaleDeliveryBeforeNext = false
+        pendingDeliveries.push({
+          execution_id: `stale-exec-${runIndex}`,
+          thread_key: captured.body.input.thread_key,
+          delivery: captured.body.input.delivery,
+          final_payload: {
+            result_text: 'stale same-channel final answer'
+          }
+        })
+      }
       pendingDeliveries.push({
         execution_id: `exec-${runIndex}`,
         thread_key: captured.body.input.thread_key,
@@ -140,7 +152,7 @@ const server = Bun.serve({
           result_text: deliveryTexts[runIndex - 1] ?? `live dogfood final answer ${runIndex}`
         }
       })
-      return Response.json({ ok: true, run_id: 'run-1' })
+      return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
     }
     if (url.pathname === '/agent/final-deliveries/claim' && request.method === 'POST') {
       await request.json()
@@ -190,6 +202,7 @@ beforeEach(() => {
   liveMessageCursor = 0
   liveMessages = ['live dogfood from Discord']
   deliveryTexts = ['live dogfood final answer']
+  injectStaleDeliveryBeforeNext = false
 })
 
 afterAll(() => {
@@ -366,6 +379,35 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
   })
 
+  it('correlates live replies to the accepted workflow execution id', async () => {
+    liveMessages = ['execution-correlated session turn']
+    deliveryTexts = ['execution-correlated final answer']
+    injectStaleDeliveryBeforeNext = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open execution-correlated dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected live dogfood to pass')
+    expect(result.executionId).toBe('exec-1')
+    expect(result.reply.message.id).toBe('reply-msg-2')
+    expect(result.reply.content).toBe('execution-correlated final answer')
+    expect(discordPosts.map(post => post.body.content)).toEqual([
+      'stale same-channel final answer',
+      'execution-correlated final answer'
+    ])
+    expect(delivered.map(item => item.path)).toEqual([
+      '/agent/final-deliveries/stale-exec-1/delivered',
+      '/agent/final-deliveries/exec-1/delivered'
+    ])
+    expect(formatted).toContain('PASS workflow execution: exec-1')
+    expect(formatted).toContain('PASS Discord reply posted: reply-msg-2')
+  })
+
   it('writes a live session transcript without auth secrets', async () => {
     liveMessages = ['first transcript turn', 'second transcript turn']
     const transcriptDir = await mkdtemp(join(tmpdir(), 'warrunner-dogfood-'))
@@ -402,6 +444,7 @@ describe('live dogfood chat loop', () => {
           {
             index: 1,
             message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+            execution_id: 'exec-1',
             text: 'first transcript turn',
             handoff: { ok: true, status: 200 },
             reply: { channel_id: 'live-thread-1', message_id: 'reply-msg-1' }
@@ -409,6 +452,7 @@ describe('live dogfood chat loop', () => {
           {
             index: 2,
             message_id: 'discord:guild-1:live-thread-1:live-msg-2',
+            execution_id: 'exec-2',
             text: 'second transcript turn',
             handoff: { ok: true, status: 200 },
             reply: { channel_id: 'live-thread-1', message_id: 'reply-msg-2' }
