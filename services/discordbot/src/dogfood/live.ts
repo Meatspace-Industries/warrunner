@@ -379,12 +379,27 @@ async function waitForReply(opts: {
 }): Promise<{ reply: ObservedReply; index: number }> {
   const started = Date.now()
   while (Date.now() - started < opts.timeoutMs) {
-    await pollFinalDeliveriesOnce(opts.config, opts.discord)
-    const replyIndex = opts.discord.observedReplies.findIndex(
-      (item, index) => index >= opts.fromIndex && item.channelId === opts.channelId
-    )
-    const reply = opts.discord.observedReplies[replyIndex]
-    if (reply) return { reply, index: replyIndex }
+    const deliveryResult = await pollFinalDeliveriesOnce(opts.config, opts.discord)
+    for (const delivery of deliveryResult.delivered) {
+      const messageIds = delivery.messages
+        .filter(message => message.channel_id === opts.channelId)
+        .map(message => message.id)
+      if (!messageIds.length) continue
+
+      const indexes = messageIds
+        .map(id =>
+          opts.discord.observedReplies.findIndex(
+            (item, index) => index >= opts.fromIndex && item.message.id === id
+          )
+        )
+        .filter(index => index >= 0)
+      if (!indexes.length) continue
+
+      const firstIndex = Math.min(...indexes)
+      const lastIndex = Math.max(...indexes)
+      const reply = opts.discord.observedReplies[firstIndex]
+      if (reply) return { reply, index: lastIndex }
+    }
     await sleep(opts.pollIntervalMs)
   }
   throw new Error(`timed out waiting for a Discord final-delivery reply in ${opts.channelId}`)

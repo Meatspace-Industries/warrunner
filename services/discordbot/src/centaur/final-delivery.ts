@@ -1,5 +1,6 @@
 import { centaurApiKey, type AppConfig } from '../config'
 import { DiscordApiError, DiscordClient } from '../discord/client'
+import type { DiscordMessage } from '../discord/types'
 import { logError } from '../logging'
 
 const CONSUMER_ID = `discordbot-${process.pid}`
@@ -13,6 +14,23 @@ const NON_RETRYABLE_DISCORD_ERRORS = new Set([
   'restricted_destination',
   'invalid_payload'
 ])
+
+export type DeliveredFinalDelivery = {
+  executionId: string
+  messages: DiscordMessage[]
+}
+
+export type FailedFinalDelivery = {
+  executionId: string
+  error: string
+  errorClass?: string
+}
+
+export type FinalDeliveryPollResult = {
+  claimed: number
+  delivered: DeliveredFinalDelivery[]
+  failed: FailedFinalDelivery[]
+}
 
 export function startFinalDeliveryPoller(config: AppConfig, client: DiscordClient): void {
   if (!centaurApiKey(config)) return
@@ -30,7 +48,7 @@ export function startFinalDeliveryPoller(config: AppConfig, client: DiscordClien
 export async function pollFinalDeliveriesOnce(
   config: AppConfig,
   client: DiscordClient
-): Promise<void> {
+): Promise<FinalDeliveryPollResult> {
   const claimed = await centaur(config, '/agent/final-deliveries/claim', {
     consumer_id: CONSUMER_ID,
     platform: 'discord',
@@ -38,19 +56,30 @@ export async function pollFinalDeliveriesOnce(
     lease_seconds: 60
   })
   const deliveries = Array.isArray(claimed.deliveries) ? claimed.deliveries : []
+  const result: FinalDeliveryPollResult = {
+    claimed: deliveries.length,
+    delivered: [],
+    failed: []
+  }
   for (const delivery of deliveries) {
     const executionId = String(delivery.execution_id)
     try {
-      await deliver(client, delivery)
+      const messages = await deliver(client, delivery)
       await centaur(
         config,
         `/agent/final-deliveries/${encodeURIComponent(executionId)}/delivered`,
         { consumer_id: CONSUMER_ID },
         delivery
       )
+      result.delivered.push({ executionId, messages })
     } catch (error) {
       const errorMessage = discordDeliveryErrorMessage(error)
       const errorClass = discordDeliveryErrorClass(error)
+      result.failed.push({
+        executionId,
+        error: errorMessage,
+        ...(errorClass ? { errorClass } : {})
+      })
       await centaur(
         config,
         `/agent/final-deliveries/${encodeURIComponent(executionId)}/failed`,
@@ -64,18 +93,21 @@ export async function pollFinalDeliveriesOnce(
       ).catch(failError => logError('final_delivery_mark_failed_failed', failError))
     }
   }
+  return result
 }
 
-async function deliver(client: DiscordClient, delivery: any): Promise<void> {
+async function deliver(client: DiscordClient, delivery: any): Promise<DiscordMessage[]> {
   const target = targetFromDelivery(delivery)
   if (!target.channelId) throw new Error('missing_discord_delivery_target')
   const text = extractText(delivery.final_payload ?? {})
+  const messages: DiscordMessage[] = []
   for (const chunk of splitFinalDeliveryText(text)) {
-    await client.createMessage(target.channelId, {
+    messages.push(await client.createMessage(target.channelId, {
       content: chunk,
       allowed_mentions: { parse: [] }
-    })
+    }))
   }
+  return messages
 }
 
 function targetFromDelivery(delivery: any): { channelId?: string } {

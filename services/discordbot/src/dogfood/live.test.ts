@@ -24,6 +24,7 @@ let activeGateway: any = null
 let liveThreadCreated = false
 let liveMessageCursor = 0
 let liveMessages: string[] = []
+let deliveryTexts: string[] = []
 
 const server = Bun.serve({
   port: 0,
@@ -98,8 +99,7 @@ const server = Bun.serve({
           thread_id: 'live-thread-1'
         },
         final_payload: {
-          result_text:
-            runIndex === 1 ? 'live dogfood final answer' : `live dogfood final answer ${runIndex}`
+          result_text: deliveryTexts[runIndex - 1] ?? `live dogfood final answer ${runIndex}`
         }
       })
       return Response.json({ ok: true, run_id: 'run-1' })
@@ -146,6 +146,7 @@ beforeEach(() => {
   liveThreadCreated = false
   liveMessageCursor = 0
   liveMessages = ['live dogfood from Discord']
+  deliveryTexts = ['live dogfood final answer']
 })
 
 afterAll(() => {
@@ -231,6 +232,31 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS live Discord dogfood session completed')
     expect(formatted).toContain('PASS turns completed: 2')
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
+  })
+
+  it('counts chunked Discord final-delivery replies as one live session turn', async () => {
+    liveMessages = ['chunked session turn', 'after chunked reply']
+    deliveryTexts = ['chunk '.repeat(500), 'second reply after chunked delivery']
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open chunked dogfood',
+      turnLimit: 2,
+      timeoutMs: 2_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfoodSession(result)
+
+    expect(result.ok).toBe(true)
+    expect(workflowRuns).toHaveLength(2)
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('chunked session turn')
+    expect(workflowRuns[1]?.body.input.parts[0].text).toBe('after chunked reply')
+    expect(discordPosts).toHaveLength(3)
+    expect(discordPosts[0]?.body.content).toStartWith('chunk')
+    expect(discordPosts[1]?.body.content).toStartWith('chunk')
+    expect(discordPosts[2]?.body.content).toBe('second reply after chunked delivery')
+    expect(delivered).toHaveLength(2)
+    expect(formatted).toContain('PASS turn 1: chunked session turn -> reply-msg-1')
+    expect(formatted).toContain('PASS turn 2: after chunked reply -> reply-msg-3')
   })
 
   it('fails before writing when the target forum is not configured as a Warrunner route', async () => {
