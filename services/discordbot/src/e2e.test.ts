@@ -151,6 +151,23 @@ afterAll(() => {
 })
 
 describe('discordbot local e2e', () => {
+  it('reports ready after bot identity hydration', async () => {
+    const { app } = await import('./index')
+    let body: any
+    await waitFor(async () => {
+      const response = await app.request('/health/ready')
+      body = await response.json()
+      return response.status === 200 && body.ready === true
+    })
+
+    expect(body.bot_identity).toMatchObject({
+      status: 'ready',
+      id: 'bot-user',
+      username: 'warrunner'
+    })
+    expect(body.checks.filter((check: any) => !check.ok)).toEqual([])
+  })
+
   it('accepts a Discord thread message and starts the Centaur workflow', async () => {
     const { app } = await import('./index')
     const response = await app.request('/api/discord/events', {
@@ -246,10 +263,13 @@ describe('discordbot local e2e', () => {
   })
 })
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 1000
+): Promise<void> {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
-    if (predicate()) return
+    if (await predicate()) return
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   throw new Error('timed out waiting for condition')

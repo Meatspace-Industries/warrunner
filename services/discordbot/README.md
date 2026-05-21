@@ -68,6 +68,10 @@ The preflight verifies the Discord bot identity, Gateway URL, configured
 forum/home channels, Centaur health, and that `discord_thread_turn` is
 registered by the API.
 
+`/health` is a liveness endpoint. `/health/ready` is the dogfood readiness gate
+and returns non-200 until Discord credentials, Centaur credentials, route config,
+and bot mention identity are ready.
+
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup
 lookup.

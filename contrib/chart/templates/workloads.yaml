@@ -665,7 +665,7 @@ spec:
               name: http
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 3002
           livenessProbe:
             httpGet:

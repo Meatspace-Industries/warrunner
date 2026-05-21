@@ -11,6 +11,11 @@ import { startDiscordGateway } from './discord/gateway'
 import { createDiscordMessageProcessor } from './discord/process'
 import type { DiscordGatewayPayload, DiscordMessage } from './discord/types'
 import { logError, logInfo, logWarn } from './logging'
+import {
+  buildReadinessReport,
+  initialBotIdentityState,
+  type BotIdentityState
+} from './readiness'
 
 const config = loadConfig()
 const discord = new DiscordClient(config)
@@ -22,6 +27,7 @@ const processDiscordMessage = createDiscordMessageProcessor({
   channels,
   handoff
 })
+const botIdentityState: BotIdentityState = initialBotIdentityState(config)
 const botIdentityReady = hydrateBotUserId()
 
 async function processReadyDiscordMessage(message: DiscordMessage): Promise<void> {
@@ -54,17 +60,27 @@ export const app = new Hono<{ Variables: Variables }>()
   )
 
 app
-  .get('/health', c =>
-    c.json({
+  .get('/health', c => {
+    const readiness = buildReadinessReport(config, botIdentityState)
+    return c.json({
       ok: true,
       service: 'discordbot',
       commit: process.env.COMMIT_SHA ?? 'local',
+      ready: readiness.ready,
       gateway_enabled: config.DISCORD_GATEWAY_ENABLED,
       discord_configured: Boolean(config.DISCORD_BOT_TOKEN),
-      centaur_configured: Boolean(centaurApiKey(config))
+      centaur_configured: Boolean(centaurApiKey(config)),
+      checks: readiness.checks,
+      bot_identity: readiness.bot_identity
     })
-  )
-  .get('/health/ready', c => c.redirect('/health'))
+  })
+  .get('/health/ready', c => {
+    const readiness = buildReadinessReport(config, botIdentityState)
+    return c.json(
+      { ok: readiness.ready, service: 'discordbot', ...readiness },
+      readiness.ready ? 200 : 503
+    )
+  })
 
 const apiKeyMiddleware: MiddlewareHandler<{ Variables: Variables }> = async (c, next) => {
   if (!config.DISCORDBOT_API_KEY) {
@@ -116,9 +132,17 @@ async function hydrateBotUserId(): Promise<void> {
     const user = await discord.fetchCurrentUser()
     if (user.id) {
       config.DISCORD_BOT_USER_ID = user.id
+      botIdentityState.status = 'ready'
+      botIdentityState.id = user.id
+      botIdentityState.username = user.username
+      delete botIdentityState.error
       logInfo('discord_bot_identity_loaded', { id: user.id, username: user.username })
     }
   } catch (error) {
+    if (botIdentityState.status !== 'configured') {
+      botIdentityState.status = 'failed'
+    }
+    botIdentityState.error = error instanceof Error ? error.message : String(error)
     logWarn('discord_bot_identity_load_failed', error)
   }
 }
