@@ -25,6 +25,41 @@ describe('dogfood operator CLI args', () => {
       positional: ['forum-1']
     })
   })
+
+  it('strips session tuning flags from positional channel and message args', () => {
+    expect(
+      parseDogfoodCliArgs([
+        '--open',
+        '--turns',
+        '12',
+        '--timeout-ms=600000',
+        '--poll-interval-ms',
+        '250',
+        'forum-1',
+        'keep',
+        'chatting'
+      ])
+    ).toEqual({
+      openDiscord: true,
+      turnLimit: 12,
+      timeoutMs: 600_000,
+      pollIntervalMs: 250,
+      positional: ['forum-1', 'keep', 'chatting']
+    })
+  })
+
+  it('rejects invalid session tuning values before they become message text', () => {
+    expect(parseDogfoodCliArgs(['--turns=0', 'forum-1'])).toEqual({
+      openDiscord: false,
+      positional: [],
+      error: '--turns must be a positive integer'
+    })
+    expect(parseDogfoodCliArgs(['--timeout-ms', '--open', 'forum-1'])).toEqual({
+      openDiscord: false,
+      positional: [],
+      error: '--timeout-ms requires a positive integer'
+    })
+  })
 })
 
 describe('dogfood Discord URL opener', () => {

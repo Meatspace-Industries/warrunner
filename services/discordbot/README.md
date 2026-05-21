@@ -170,9 +170,11 @@ pnpm --filter discordbot dogfood:session -- <channel-or-forum-id>
 
 This uses the same setup as `dogfood:live`, but waits for multiple Discord
 messages and prints each accepted message plus the Discord reply id. It defaults
-to three turns; set `WARRUNNER_DOGFOOD_SESSION_TURNS` to change that count. Use
-the printed Discord URL as the window to keep chatting with Warrunner.
-For the tightest local loop, run `pnpm --filter discordbot dogfood:session -- --open <channel-or-forum-id>`.
+to three turns; pass `--turns <n>` or set `WARRUNNER_DOGFOOD_SESSION_TURNS` to
+change that count. Pass `--timeout-ms <ms>` to extend a long manual session
+without editing env. Use the printed Discord URL as the window to keep chatting
+with Warrunner. For the tightest local loop, run
+`pnpm --filter discordbot dogfood:session -- --open --turns 12 --timeout-ms 600000 <channel-or-forum-id>`.
 
 `DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
 before processing inbound messages. Setting it explicitly avoids that startup

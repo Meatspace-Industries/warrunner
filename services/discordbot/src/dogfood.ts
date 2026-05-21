@@ -110,6 +110,7 @@ if (import.meta.main) {
     process.exit(result.ok ? 0 : 1)
   }
   if (command === 'live') {
+    const args = requireDogfoodCliArgs(globalArgs.positional, env)
     const transcriptDir = globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
     await requireDogfoodTranscriptDir(transcriptDir)
     const config = loadConfig(env)
@@ -117,7 +118,6 @@ if (import.meta.main) {
     console.log(formatPreflight(preflight))
     if (!preflight.ok) process.exit(1)
 
-    const args = parseDogfoodCliArgs(globalArgs.positional, env)
     const argChannelId = args.positional[0]?.trim()
     const channelId = argChannelId || env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
     const contentArgs = argChannelId ? args.positional.slice(1) : args.positional
@@ -125,7 +125,8 @@ if (import.meta.main) {
       channelId,
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
-      timeoutMs: parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
+      timeoutMs: args.timeoutMs ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
+      pollIntervalMs: args.pollIntervalMs,
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfood(result))
@@ -137,6 +138,7 @@ if (import.meta.main) {
     process.exit(dogfoodCommandExitCode(result.ok, transcriptOk))
   }
   if (command === 'session') {
+    const args = requireDogfoodCliArgs(globalArgs.positional, env)
     const transcriptDir = globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
     await requireDogfoodTranscriptDir(transcriptDir)
     const config = loadConfig(env)
@@ -144,7 +146,6 @@ if (import.meta.main) {
     console.log(formatPreflight(preflight))
     if (!preflight.ok) process.exit(1)
 
-    const args = parseDogfoodCliArgs(globalArgs.positional, env)
     const argChannelId = args.positional[0]?.trim()
     const channelId = argChannelId || env.WARRUNNER_DOGFOOD_SMOKE_CHANNEL_ID?.trim()
     const contentArgs = argChannelId ? args.positional.slice(1) : args.positional
@@ -152,8 +153,9 @@ if (import.meta.main) {
       channelId,
       content: contentArgs.join(' '),
       appliedTagIds: splitList(env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? ''),
-      timeoutMs: parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
-      turnLimit: parsePositiveInt(env.WARRUNNER_DOGFOOD_SESSION_TURNS) ?? 3,
+      timeoutMs: args.timeoutMs ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS),
+      pollIntervalMs: args.pollIntervalMs,
+      turnLimit: args.turnLimit ?? parsePositiveInt(env.WARRUNNER_DOGFOOD_SESSION_TURNS) ?? 3,
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfoodSession(result))
@@ -167,7 +169,7 @@ if (import.meta.main) {
   if (command !== 'preflight') {
     console.error(`Unsupported dogfood command: ${command}`)
     console.error(
-      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--open] <channel-id> [message]'
+      'Usage: pnpm --filter discordbot dogfood:preflight -- [--dogfood-env-file=<path>] | pnpm --filter discordbot dogfood:emulated | pnpm --filter discordbot dogfood:smoke -- [--dogfood-env-file=<path>] <channel-id> [message] | pnpm --filter discordbot dogfood:live -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--timeout-ms=<ms>] [--open] <channel-id> [message] | pnpm --filter discordbot dogfood:session -- [--dogfood-env-file=<path>] [--transcript-dir=<path>] [--turns=<n>] [--timeout-ms=<ms>] [--open] <channel-id> [message]'
     )
     process.exit(2)
   }
@@ -232,6 +234,16 @@ async function requireDogfoodTranscriptDir(transcriptDir: string | undefined): P
   if (prepared.ok) return
   console.error(`FAIL dogfood transcript dir: ${prepared.error}`)
   process.exit(1)
+}
+
+function requireDogfoodCliArgs(
+  args: string[],
+  env: Parameters<typeof parseDogfoodCliArgs>[1]
+): ReturnType<typeof parseDogfoodCliArgs> {
+  const parsed = parseDogfoodCliArgs(args, env)
+  if (!parsed.error) return parsed
+  console.error(parsed.error)
+  process.exit(2)
 }
 
 async function checkDiscordIdentity(

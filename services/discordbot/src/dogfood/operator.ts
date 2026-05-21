@@ -8,7 +8,11 @@ type SpawnLike = (
 
 export type DogfoodCliArgs = {
   openDiscord: boolean
+  turnLimit?: number
+  timeoutMs?: number
+  pollIntervalMs?: number
   positional: string[]
+  error?: string
 }
 
 export type OpenDiscordUrlResult =
@@ -31,8 +35,13 @@ export function parseDogfoodCliArgs(
   }
 ): DogfoodCliArgs {
   let openDiscord = truthy(env.WARRUNNER_DOGFOOD_OPEN_DISCORD)
+  let turnLimit: number | undefined
+  let timeoutMs: number | undefined
+  let pollIntervalMs: number | undefined
   const positional: string[] = []
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (arg === undefined) continue
     if (arg === '--open' || arg === '--open-discord') {
       openDiscord = true
       continue
@@ -41,9 +50,61 @@ export function parseDogfoodCliArgs(
       openDiscord = false
       continue
     }
+    if (arg === '--turns' || arg === '--session-turns') {
+      const value = args[index + 1]?.trim()
+      const parsed = parsePositiveIntegerFlag(arg, value)
+      if ('error' in parsed) return { openDiscord, positional, error: parsed.error }
+      turnLimit = parsed.value
+      index += 1
+      continue
+    }
+    if (arg.startsWith('--turns=') || arg.startsWith('--session-turns=')) {
+      const [flag, value = ''] = splitFlagValue(arg)
+      const parsed = parsePositiveIntegerFlag(flag, value)
+      if ('error' in parsed) return { openDiscord, positional, error: parsed.error }
+      turnLimit = parsed.value
+      continue
+    }
+    if (arg === '--timeout-ms') {
+      const value = args[index + 1]?.trim()
+      const parsed = parsePositiveIntegerFlag(arg, value)
+      if ('error' in parsed) return { openDiscord, positional, error: parsed.error }
+      timeoutMs = parsed.value
+      index += 1
+      continue
+    }
+    if (arg.startsWith('--timeout-ms=')) {
+      const parsed = parsePositiveIntegerFlag('--timeout-ms', arg.slice('--timeout-ms='.length))
+      if ('error' in parsed) return { openDiscord, positional, error: parsed.error }
+      timeoutMs = parsed.value
+      continue
+    }
+    if (arg === '--poll-interval-ms') {
+      const value = args[index + 1]?.trim()
+      const parsed = parsePositiveIntegerFlag(arg, value)
+      if ('error' in parsed) return { openDiscord, positional, error: parsed.error }
+      pollIntervalMs = parsed.value
+      index += 1
+      continue
+    }
+    if (arg.startsWith('--poll-interval-ms=')) {
+      const parsed = parsePositiveIntegerFlag(
+        '--poll-interval-ms',
+        arg.slice('--poll-interval-ms='.length)
+      )
+      if ('error' in parsed) return { openDiscord, positional, error: parsed.error }
+      pollIntervalMs = parsed.value
+      continue
+    }
     positional.push(arg)
   }
-  return { openDiscord, positional }
+  return {
+    openDiscord,
+    ...(turnLimit ? { turnLimit } : {}),
+    ...(timeoutMs ? { timeoutMs } : {}),
+    ...(pollIntervalMs ? { pollIntervalMs } : {}),
+    positional
+  }
 }
 
 export function liveProgressReporter(opts: {
@@ -110,4 +171,21 @@ export function discordOpenCommand(
 function truthy(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase()
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
+function splitFlagValue(arg: string): [string, string] {
+  const equalsIndex = arg.indexOf('=')
+  return [arg.slice(0, equalsIndex), arg.slice(equalsIndex + 1)]
+}
+
+function parsePositiveIntegerFlag(
+  flag: string,
+  value: string | undefined
+): { value: number } | { error: string } {
+  if (!value || value.startsWith('--')) return { error: `${flag} requires a positive integer` }
+  const number = Number(value)
+  if (!Number.isInteger(number) || number <= 0) {
+    return { error: `${flag} must be a positive integer` }
+  }
+  return { value: number }
 }

@@ -103,6 +103,24 @@ if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$direct_transcript_output"; the
   echo "Direct transcript dir validation should fail before dogfood preflight." >&2
   exit 1
 fi
+echo
+echo "==> pnpm --filter discordbot dogfood:session -- --dogfood-env-file=.env.example --turns=0 --no-open"
+if invalid_turns_output="$(
+  pnpm --filter discordbot dogfood:session -- \
+    --dogfood-env-file=.env.example \
+    --turns=0 \
+    --no-open 2>&1
+)"; then
+  echo "$invalid_turns_output"
+  echo "Expected direct dogfood session to reject invalid turn count before preflight." >&2
+  exit 1
+fi
+echo "$invalid_turns_output"
+grep -q -- "--turns must be a positive integer" <<<"$invalid_turns_output"
+if grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$invalid_turns_output"; then
+  echo "Direct session tuning validation should fail before dogfood preflight." >&2
+  exit 1
+fi
 run uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py
 run helm repo add 1password https://1password.github.io/connect-helm-charts --force-update
 run helm dependency build contrib/chart

@@ -31,6 +31,7 @@ Examples:
   meatspace/scripts/warrunner-live-dogfood.sh preflight
   meatspace/scripts/warrunner-live-dogfood.sh session
   meatspace/scripts/warrunner-live-dogfood.sh session -- 123456789012345678
+  meatspace/scripts/warrunner-live-dogfood.sh session -- --turns 12 --timeout-ms 600000 123456789012345678
 USAGE
 }
 
