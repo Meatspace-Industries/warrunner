@@ -49,6 +49,13 @@ type ObservedReply = ObservedReplyMessage & {
   source: 'final_delivery' | 'channel_history'
 }
 
+type StoredFinalDeliveryReply = {
+  executionId: string
+  firstIndex: number
+  lastIndex: number
+  reply: ObservedReply
+}
+
 type LiveDogfoodTurn = {
   observedEvent: NormalizedDiscordEvent
   handoff: CentaurHandoffResult
@@ -252,6 +259,7 @@ export async function runLiveDogfoodSession(
     discord.armReplyObserver()
     const turnLimit = sessionTurnLimit(opts.turnLimit)
     let replyCursor = 0
+    const finalDeliveryReplies = new FinalDeliveryReplyTracker()
     while (untilTimeout || turns.length < turnLimit) {
       const nextMessageTimeout = `timed out waiting for Discord message ${turns.length + 1} in ${target.conversationChannelId}`
       let accepted: AcceptedLiveDiscordMessage
@@ -291,6 +299,7 @@ export async function runLiveDogfoodSession(
         botUserId: botUser.id,
         afterMessageId: accepted.event.discord.message_id,
         executionId: accepted.executionId,
+        finalDeliveryReplies,
         fromIndex: replyCursor,
         timeoutMs: remainingTimeout(timeoutMs, startedAt),
         pollIntervalMs
@@ -471,6 +480,60 @@ class ObservingDiscordClient extends DiscordClient {
   }
 }
 
+class FinalDeliveryReplyTracker {
+  readonly replies: StoredFinalDeliveryReply[] = []
+  readonly seenExecutionIds = new Set<string>()
+
+  record(
+    deliveries: Array<{ executionId: string; messages: DiscordMessage[] }>,
+    discord: ObservingDiscordClient
+  ): void {
+    for (const delivery of deliveries) {
+      if (this.seenExecutionIds.has(delivery.executionId)) continue
+      const indexes = delivery.messages
+        .map(message =>
+          discord.observedReplies.findIndex(reply => reply.message.id === message.id)
+        )
+        .filter(index => index >= 0)
+      if (!indexes.length) continue
+
+      const firstIndex = Math.min(...indexes)
+      const lastIndex = Math.max(...indexes)
+      const reply = discord.observedReplies[firstIndex]
+      if (!reply) continue
+
+      const messages = indexes
+        .sort((left, right) => left - right)
+        .map(index => discord.observedReplies[index])
+        .filter(message => message !== undefined)
+      this.replies.push({
+        executionId: delivery.executionId,
+        firstIndex,
+        lastIndex,
+        reply: { ...reply, messages, source: 'final_delivery' }
+      })
+      this.seenExecutionIds.add(delivery.executionId)
+    }
+  }
+
+  take(opts: {
+    executionId?: string
+    channelId: string
+    fromIndex: number
+  }): { reply: ObservedReply; index: number } | undefined {
+    const index = this.replies.findIndex(
+      item =>
+        (!opts.executionId || item.executionId === opts.executionId) &&
+        item.reply.channelId === opts.channelId &&
+        item.firstIndex >= opts.fromIndex
+    )
+    if (index < 0) return undefined
+    const [item] = this.replies.splice(index, 1)
+    if (!item) return undefined
+    return { reply: item.reply, index: item.lastIndex }
+  }
+}
+
 function startLiveGateway(
   config: AppConfig,
   discord: DiscordClient,
@@ -579,40 +642,28 @@ async function waitForReply(opts: {
   botUserId?: string
   afterMessageId: string
   executionId?: string
+  finalDeliveryReplies: FinalDeliveryReplyTracker
   fromIndex: number
   timeoutMs: number
   pollIntervalMs: number
 }): Promise<{ reply: ObservedReply; index: number }> {
   const started = Date.now()
   while (Date.now() - started < opts.timeoutMs) {
+    const cached = opts.finalDeliveryReplies.take({
+      executionId: opts.executionId,
+      channelId: opts.channelId,
+      fromIndex: opts.fromIndex
+    })
+    if (cached) return cached
+
     const deliveryResult = await pollFinalDeliveriesOnce(opts.config, opts.discord)
-    for (const delivery of deliveryResult.delivered) {
-      if (opts.executionId && delivery.executionId !== opts.executionId) continue
-      const messageIds = delivery.messages
-        .filter(message => message.channel_id === opts.channelId)
-        .map(message => message.id)
-      if (!messageIds.length) continue
-
-      const indexes = messageIds
-        .map(id =>
-          opts.discord.observedReplies.findIndex(
-            (item, index) => index >= opts.fromIndex && item.message.id === id
-          )
-        )
-        .filter(index => index >= 0)
-      if (!indexes.length) continue
-
-      const firstIndex = Math.min(...indexes)
-      const lastIndex = Math.max(...indexes)
-      const reply = opts.discord.observedReplies[firstIndex]
-      if (reply) {
-        const messages = indexes
-          .sort((left, right) => left - right)
-          .map(index => opts.discord.observedReplies[index])
-          .filter(message => message !== undefined)
-        return { reply: { ...reply, messages, source: 'final_delivery' }, index: lastIndex }
-      }
-    }
+    opts.finalDeliveryReplies.record(deliveryResult.delivered, opts.discord)
+    const delivered = opts.finalDeliveryReplies.take({
+      executionId: opts.executionId,
+      channelId: opts.channelId,
+      fromIndex: opts.fromIndex
+    })
+    if (delivered) return delivered
 
     const observed = await observeBotReplyFromDiscord(opts)
     if (observed) return { reply: observed, index: opts.discord.observedReplies.length - 1 }
