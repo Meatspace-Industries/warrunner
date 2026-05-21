@@ -22,6 +22,8 @@ The E2E test starts an in-process fake Discord API and fake Centaur API, then
 verifies:
 
 - `/api/discord/events` accepts a Discord thread message.
+- Discordbot can identify to a Discord-like Gateway and consume a
+  `MESSAGE_CREATE` dispatch over WebSocket.
 - Discordbot resolves the parent forum channel and fetches thread history.
 - Discordbot starts a `discord_thread_turn` workflow run.
 - Discordbot claims a final delivery and posts the final answer back to the

@@ -15,22 +15,27 @@ const INTENT_GUILDS = 1 << 0
 const INTENT_GUILD_MESSAGES = 1 << 9
 const INTENT_MESSAGE_CONTENT = 1 << 15
 
+export type DiscordGatewayHandle = {
+  stop(): void
+}
+
 export function startDiscordGateway(opts: {
   config: AppConfig
   client: DiscordClient
   channelResolver: DiscordChannelResolver
   onMessage(message: DiscordMessage): Promise<void>
-}): void {
-  if (!opts.config.DISCORD_GATEWAY_ENABLED) return
+}): DiscordGatewayHandle | null {
+  if (!opts.config.DISCORD_GATEWAY_ENABLED) return null
   if (!opts.config.DISCORD_BOT_TOKEN) {
     logWarn('discord_gateway_not_started', { reason: 'missing_DISCORD_BOT_TOKEN' })
-    return
+    return null
   }
   const runner = new DiscordGatewayRunner(opts)
   runner.start()
+  return runner
 }
 
-class DiscordGatewayRunner {
+class DiscordGatewayRunner implements DiscordGatewayHandle {
   readonly config: AppConfig
   readonly client: DiscordClient
   readonly channelResolver: DiscordChannelResolver
@@ -39,6 +44,7 @@ class DiscordGatewayRunner {
   heartbeatTimer: ReturnType<typeof setInterval> | null = null
   reconnectTimer: ReturnType<typeof setTimeout> | null = null
   socket: WebSocket | null = null
+  stopped = false
 
   constructor(opts: {
     config: AppConfig
@@ -56,7 +62,20 @@ class DiscordGatewayRunner {
     void this.connect()
   }
 
+  stop(): void {
+    this.stopped = true
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.heartbeatTimer = null
+    this.reconnectTimer = null
+    if (this.socket) {
+      this.socket.close()
+      this.socket = null
+    }
+  }
+
   async connect(): Promise<void> {
+    if (this.stopped) return
     try {
       const gatewayUrl = await this.client.gatewayBotUrl()
       const url = `${gatewayUrl}?v=10&encoding=json`
@@ -160,6 +179,7 @@ class DiscordGatewayRunner {
   }
 
   scheduleReconnect(): void {
+    if (this.stopped) return
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = null
     if (this.reconnectTimer) return
