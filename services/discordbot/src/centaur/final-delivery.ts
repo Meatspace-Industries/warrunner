@@ -24,6 +24,9 @@ export type FailedFinalDelivery = {
   executionId: string
   error: string
   errorClass?: string
+  channelId?: string
+  guildId?: string
+  messageId?: string
 }
 
 export type FinalDeliveryPollResult = {
@@ -75,10 +78,14 @@ export async function pollFinalDeliveriesOnce(
     } catch (error) {
       const errorMessage = discordDeliveryErrorMessage(error)
       const errorClass = discordDeliveryErrorClass(error)
+      const target = targetFromDelivery(delivery)
       result.failed.push({
         executionId,
         error: errorMessage,
-        ...(errorClass ? { errorClass } : {})
+        ...(errorClass ? { errorClass } : {}),
+        ...(target.channelId ? { channelId: target.channelId } : {}),
+        ...(target.guildId ? { guildId: target.guildId } : {}),
+        ...(target.messageId ? { messageId: target.messageId } : {})
       })
       await centaur(
         config,

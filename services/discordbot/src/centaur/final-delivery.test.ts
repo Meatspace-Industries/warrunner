@@ -139,4 +139,71 @@ describe('pollFinalDeliveriesOnce', () => {
       }
     ])
   })
+
+  it('returns failed delivery target metadata for Discord post failures', async () => {
+    const failed: Array<{ path: string; body: any }> = []
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return Response.json({
+          deliveries: [
+            {
+              execution_id: 'exec-failed',
+              thread_key: 'discord:guild-1:forum-1:thread-1',
+              delivery: {
+                platform: 'discord',
+                guild_id: 'guild-1',
+                channel_id: 'thread-1',
+                thread_id: 'thread-1',
+                message_id: 'discord:guild-1:thread-1:source-msg-1'
+              },
+              final_payload: { result_text: 'cannot post this answer' }
+            }
+          ]
+        })
+      }
+      if (url.pathname === '/agent/final-deliveries/exec-failed/failed') {
+        failed.push({
+          path: url.pathname,
+          body: JSON.parse(String(init?.body ?? '{}'))
+        })
+        return Response.json({ ok: true })
+      }
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }) as typeof fetch
+
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      PORT: '3002',
+      ENVIRONMENT: 'test',
+      COMMIT_SHA: 'test',
+      CENTAUR_API_URL: 'http://centaur.test',
+      DISCORDBOT_API_KEY: 'centaur-key'
+    } as NodeJS.ProcessEnv)
+    const client = {
+      createMessage: async () => {
+        throw new Error('discord_forbidden: Missing Permissions')
+      }
+    } as any
+
+    const result = await pollFinalDeliveriesOnce(config, client)
+
+    expect(result.delivered).toHaveLength(0)
+    expect(result.failed).toEqual([
+      {
+        executionId: 'exec-failed',
+        error: 'discord_forbidden: Missing Permissions',
+        errorClass: 'discord_forbidden',
+        channelId: 'thread-1',
+        guildId: 'guild-1',
+        messageId: 'source-msg-1'
+      }
+    ])
+    expect(failed).toHaveLength(1)
+    expect(failed[0]?.body).toMatchObject({
+      error: 'discord_forbidden: Missing Permissions',
+      error_class: 'discord_forbidden',
+      non_retryable: true
+    })
+  })
 })

@@ -667,6 +667,37 @@ describe('live dogfood chat loop', () => {
     expect(formatted).not.toContain('timed out waiting for a Discord final-delivery reply')
   })
 
+  it('matches final-delivery post failures by Discord reference when handoff omits execution id', async () => {
+    liveMessages = ['delivery failure without execution id']
+    workflowResponseIncludesExecutionId = false
+    discordRejectsNextPost = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open no-execution delivery failure dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(result.observedEvent?.discord.message_id).toBe('live-msg-1')
+    expect(result.executionId).toBeUndefined()
+    expect(workflowRuns).toHaveLength(1)
+    expect(discordPosts).toHaveLength(0)
+    expect(delivered).toHaveLength(0)
+    expect(failedDeliveries.map(item => item.path)).toEqual([
+      '/agent/final-deliveries/exec-1/failed'
+    ])
+    expect(formatted).toContain(
+      'FAIL live Discord chat loop: final_delivery_failed:exec-1: discord_forbidden: Missing Permissions'
+    )
+    expect(formatted).toContain(
+      'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
+    )
+    expect(formatted).not.toContain('PASS workflow execution:')
+    expect(formatted).not.toContain('timed out waiting for a Discord final-delivery reply')
+  })
+
   it('recovers a fresh Discord message from channel history when Gateway intake misses it', async () => {
     liveDispatchGatewayMessages = false
     const progress: string[] = []

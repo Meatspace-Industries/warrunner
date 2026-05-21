@@ -1,4 +1,4 @@
-import { pollFinalDeliveriesOnce } from '../centaur/final-delivery'
+import { pollFinalDeliveriesOnce, type FailedFinalDelivery } from '../centaur/final-delivery'
 import { CentaurHandoff, type CentaurHandoffResult } from '../centaur/handoff'
 import { homeChannelIds, loadConfig, type AppConfig } from '../config'
 import { DiscordChannelResolver, DiscordClient } from '../discord/client'
@@ -746,7 +746,11 @@ async function waitForReply(opts: {
     if (cached) return cached
 
     const deliveryResult = await pollFinalDeliveriesOnce(opts.config, opts.discord)
-    const failedDelivery = matchingFinalDeliveryFailure(deliveryResult.failed, opts.executionId)
+    const failedDelivery = matchingFinalDeliveryFailure(deliveryResult.failed, {
+      executionId: opts.executionId,
+      channelId: opts.channelId,
+      acceptedMessageId: opts.afterMessageId
+    })
     if (failedDelivery) throw new Error(finalDeliveryFailureError(failedDelivery))
     opts.finalDeliveryReplies.record(deliveryResult.delivered, opts.discord)
     const delivered = opts.finalDeliveryReplies.take({
@@ -765,18 +769,17 @@ async function waitForReply(opts: {
 }
 
 function matchingFinalDeliveryFailure(
-  failed: Array<{ executionId: string; error: string; errorClass?: string }>,
-  executionId: string | undefined
-): { executionId: string; error: string; errorClass?: string } | undefined {
-  if (!executionId) return undefined
-  return failed.find(item => item.executionId === executionId)
+  failed: FailedFinalDelivery[],
+  opts: { executionId?: string; channelId: string; acceptedMessageId: string }
+): FailedFinalDelivery | undefined {
+  return failed.find(item =>
+    opts.executionId
+      ? item.executionId === opts.executionId
+      : item.channelId === opts.channelId && item.messageId === opts.acceptedMessageId
+  )
 }
 
-function finalDeliveryFailureError(failure: {
-  executionId: string
-  error: string
-  errorClass?: string
-}): string {
+function finalDeliveryFailureError(failure: FailedFinalDelivery): string {
   const detail = failure.errorClass ? `${failure.errorClass}: ${failure.error}` : failure.error
   return `final_delivery_failed:${failure.executionId}: ${detail}`
 }
