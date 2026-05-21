@@ -679,6 +679,7 @@ async function processChannelHistoryIntake(opts: {
     })
     .catch(() => [])
   let cursor = opts.afterMessageId
+  // DiscordClient normalizes channel history to oldest-to-newest; preserve chat order here.
   for (const message of messages) {
     if (message.channel_id !== opts.channelId) continue
     cursor = message.id || cursor

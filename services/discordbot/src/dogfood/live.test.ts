@@ -610,6 +610,70 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-1')
   })
 
+  it('replays multiple missed history messages in Discord chat order', async () => {
+    liveDispatchGatewayMessages = false
+    deliveryTexts = ['first history answer', 'second history answer']
+    const progress: string[] = []
+    const result = await runLiveDogfoodSession(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open multi-history fallback dogfood',
+      turnLimit: 2,
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+      onProgress: line => {
+        progress.push(line)
+        if (line.includes('PASS live target ready')) {
+          historyDiscordMessages.push(
+            {
+              id: 'history-msg-1',
+              channel_id: 'live-thread-1',
+              guild_id: 'guild-1',
+              content: '<@bot-user> first missed history turn',
+              author: { id: 'user-1' },
+              mentions: [{ id: 'bot-user' }],
+              attachments: []
+            },
+            {
+              id: 'history-msg-2',
+              channel_id: 'live-thread-1',
+              guild_id: 'guild-1',
+              content: '<@bot-user> second missed history turn',
+              author: { id: 'user-1' },
+              mentions: [{ id: 'bot-user' }],
+              attachments: []
+            }
+          )
+        }
+      }
+    })
+    const formatted = formatLiveDogfoodSession(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect(progress.filter(line => line.includes('PASS live Discord history intake:'))).toEqual([
+      'PASS live Discord history intake: history-msg-1',
+      'PASS live Discord history intake: history-msg-2'
+    ])
+    expect(workflowRuns.map(run => run.body.input.parts[0].text)).toEqual([
+      'first missed history turn',
+      'second missed history turn'
+    ])
+    expect(discordPosts.map(post => post.body.content)).toEqual([
+      'first history answer',
+      'second history answer'
+    ])
+    expect(discordPosts.map(post => post.body.message_reference?.message_id)).toEqual([
+      'history-msg-1',
+      'history-msg-2'
+    ])
+    expect(formatted).toContain(
+      'PASS turn 1: first missed history turn -> reply-msg-1 [exec-1] via final_delivery'
+    )
+    expect(formatted).toContain(
+      'PASS turn 2: second missed history turn -> reply-msg-2 [exec-2] via final_delivery'
+    )
+  })
+
   it('keeps a live session open for multiple Discord turns', async () => {
     liveMessages = ['first session turn', 'second session turn']
     const result = await runLiveDogfoodSession(testConfig(), {
