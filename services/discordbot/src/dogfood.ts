@@ -31,6 +31,13 @@ type RegisteredWorkflowsResponse = {
   workflows?: Array<{ name?: unknown }>
 }
 
+type DiscordbotReadyResponse = {
+  ready?: unknown
+  ok?: unknown
+  checks?: Array<{ name?: unknown; ok?: unknown; detail?: unknown }>
+  bot_identity?: { status?: unknown; id?: unknown; username?: unknown }
+}
+
 const CHANNEL_TYPES: Record<number, string> = {
   0: 'guild_text',
   5: 'guild_announcement',
@@ -61,6 +68,7 @@ export async function runPreflight(config: AppConfig = loadConfig()): Promise<Pr
     await checkCentaurHealth(config, checks)
     await checkDiscordWorkflowRegistered(config, checks)
   }
+  await checkDiscordbotReadiness(config, checks)
 
   return { ok: checks.every(check => check.ok), checks }
 }
@@ -352,6 +360,47 @@ async function checkDiscordWorkflowRegistered(config: AppConfig, checks: Check[]
       hint: 'Verify CENTAUR_API_URL and DISCORDBOT_API_KEY.'
     })
   }
+}
+
+async function checkDiscordbotReadiness(config: AppConfig, checks: Check[]): Promise<void> {
+  const baseUrl = config.WARRUNNER_DISCORDBOT_URL.trim()
+  if (!baseUrl) return
+  try {
+    const response = await fetch(new URL('/health/ready', baseUrl))
+    const body = (await response.json().catch(() => ({}))) as DiscordbotReadyResponse
+    const ready = response.ok && (body.ready === true || body.ok === true)
+    addCheck(checks, {
+      name: 'Discordbot readiness',
+      ok: ready,
+      detail: discordbotReadinessDetail(response, body),
+      hint:
+        'Start the long-running Discordbot service and wait for /health/ready to report ready before relying on Discord-window chat.'
+    })
+  } catch (error) {
+    addCheck(checks, {
+      name: 'Discordbot readiness',
+      ok: false,
+      detail: errorMessage(error),
+      hint: 'Check WARRUNNER_DISCORDBOT_URL and the Discordbot service network path.'
+    })
+  }
+}
+
+function discordbotReadinessDetail(response: Response, body: DiscordbotReadyResponse): string {
+  const identity = body.bot_identity
+  const identityText =
+    identity?.username && identity?.id
+      ? ` bot=${identity.username} (${identity.id})`
+      : identity?.id
+        ? ` bot=${identity.id}`
+        : identity?.status
+          ? ` bot=${identity.status}`
+          : ''
+  const failedChecks = (body.checks ?? [])
+    .filter(check => check.ok === false)
+    .map(check => `${String(check.name ?? 'unknown')}=${String(check.detail ?? 'failed')}`)
+  const failureText = failedChecks.length ? ` failed=${failedChecks.join(',')}` : ''
+  return `${response.status} ${response.statusText}${identityText}${failureText}`.trim()
 }
 
 function addBotMentionCheck(config: AppConfig, botUser: DiscordUser | null, checks: Check[]): void {

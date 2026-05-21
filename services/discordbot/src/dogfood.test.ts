@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
 import { loadConfig, type AppConfig } from './config'
 import { dogfoodCommandExitCode, formatPreflight, runPreflight } from './dogfood'
 import { formatEmulatedChatLoop, runEmulatedChatLoop } from './dogfood/emulated'
@@ -7,6 +7,7 @@ import { formatSmokePost, runSmokePost } from './dogfood/smoke'
 const centaurAuthHeaders: string[] = []
 const smokePosts: Array<{ authorization: string; body: any }> = []
 const forumThreads: Array<{ authorization: string; body: any }> = []
+let discordbotReady = true
 
 const server = Bun.serve({
   port: 0,
@@ -73,6 +74,28 @@ const server = Bun.serve({
     if (url.pathname === '/health' && request.method === 'GET') {
       return Response.json({ status: 'ok' })
     }
+    if (url.pathname === '/health/ready' && request.method === 'GET') {
+      if (discordbotReady) {
+        return Response.json({
+          ok: true,
+          ready: true,
+          bot_identity: { status: 'ready', id: 'bot-user', username: 'warrunner' },
+          checks: [{ name: 'bot_identity', ok: true, detail: 'warrunner (bot-user)' }]
+        })
+      }
+      return Response.json(
+        {
+          ok: false,
+          ready: false,
+          bot_identity: { status: 'loading' },
+          checks: [
+            { name: 'bot_identity', ok: false, detail: 'loading' },
+            { name: 'route_config', ok: true, detail: 'forum=forum-1' }
+          ]
+        },
+        { status: 503 }
+      )
+    }
     if (url.pathname === '/workflows/registered' && request.method === 'GET') {
       centaurAuthHeaders.push(request.headers.get('authorization') ?? '')
       return Response.json({
@@ -92,6 +115,10 @@ const server = Bun.serve({
 
 const fakeBaseUrl = `http://127.0.0.1:${server.port}`
 
+beforeEach(() => {
+  discordbotReady = true
+})
+
 afterAll(() => {
   server.stop(true)
 })
@@ -105,6 +132,25 @@ describe('dogfood preflight', () => {
     expect(formatPreflight(result)).toContain('PASS warrunner dogfood preflight passed')
     expect(result.checks.map(check => check.name)).toContain('discord_thread_turn workflow')
     expect(centaurAuthHeaders).toEqual(['Bearer centaur-key'])
+  })
+
+  it('optionally verifies the long-running Discordbot readiness endpoint', async () => {
+    const result = await runPreflight(testConfig({ WARRUNNER_DISCORDBOT_URL: fakeBaseUrl }))
+    const formatted = formatPreflight(result)
+
+    expect(result.ok).toBe(true)
+    expect(formatted).toContain('PASS Discordbot readiness: 200 OK bot=warrunner (bot-user)')
+  })
+
+  it('fails when the configured Discordbot readiness endpoint is not ready', async () => {
+    discordbotReady = false
+    const result = await runPreflight(testConfig({ WARRUNNER_DISCORDBOT_URL: fakeBaseUrl }))
+    const formatted = formatPreflight(result)
+
+    expect(result.ok).toBe(false)
+    expect(formatted).toContain('FAIL Discordbot readiness: 503')
+    expect(formatted).toContain('failed=bot_identity=loading')
+    expect(formatted).toContain('Start the long-running Discordbot service')
   })
 
   it('fails locally without required dogfood configuration', async () => {
@@ -201,7 +247,7 @@ describe('dogfood emulated chat loop', () => {
   })
 })
 
-function testConfig(): AppConfig {
+function testConfig(overrides: Record<string, string> = {}): AppConfig {
   return loadConfig({
     ...requiredEnv(),
     DISCORD_API_URL: fakeBaseUrl,
@@ -210,7 +256,8 @@ function testConfig(): AppConfig {
     CENTAUR_API_URL: fakeBaseUrl,
     DISCORDBOT_API_KEY: 'centaur-key',
     WARRUNNER_HOME_FORUM_CHANNEL_ID: 'forum-1',
-    WARRUNNER_HOME_CHANNEL_IDS: 'home-1'
+    WARRUNNER_HOME_CHANNEL_IDS: 'home-1',
+    ...overrides
   })
 }
 

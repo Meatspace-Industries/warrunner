@@ -117,7 +117,9 @@ values are not set: `MEEPO_DISCORD_GUILD_ID` for `DISCORD_GUILD_ID`,
 
 The preflight verifies the Discord bot identity, Gateway URL, configured
 forum/home channels, Centaur health, and that `discord_thread_turn` is
-registered by the API.
+registered by the API. If `WARRUNNER_DISCORDBOT_URL` is set, preflight also
+checks `<url>/health/ready` so operators can verify the long-running Discordbot
+is ready before relying on Discord-window chat.
 
 `/health` is a liveness endpoint. `/health/ready` is the dogfood readiness gate
 and returns non-200 until Discord credentials, Gateway ingest, the dogfood guild

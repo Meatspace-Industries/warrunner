@@ -33,6 +33,7 @@ const EnvSchema = z.object({
   CENTAUR_API_URL: z.string().url().default('http://localhost:8000'),
   CENTAUR_API_KEY: z.string().optional(),
   DISCORDBOT_API_KEY: z.string().optional(),
+  WARRUNNER_DISCORDBOT_URL: z.string().default(''),
   WARRUNNER_HOME_FORUM_CHANNEL_ID: z.string().default(''),
   WARRUNNER_HOME_CHANNEL_ID: z.string().default(''),
   WARRUNNER_HOME_CHANNEL_IDS: ListFromEnv,
