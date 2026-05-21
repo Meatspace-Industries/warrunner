@@ -53,6 +53,7 @@ let externalDeliveryClaimedByService = false
 let externalDeliveryReferencesAcceptedMessage = true
 let externalDeliveryAddsUnrelatedReferencedReply = false
 let workflowResponseIncludesExecutionId = true
+let workflowRejectsNextHandoff = false
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 let liveMessageScheduleDelaysMs: number[] = []
 
@@ -186,6 +187,10 @@ const server = Bun.serve({
     if (url.pathname === '/workflows/runs' && request.method === 'POST') {
       const captured = await capture(request, url.pathname)
       workflowRuns.push(captured)
+      if (workflowRejectsNextHandoff) {
+        workflowRejectsNextHandoff = false
+        return Response.json({ error: 'workflow temporarily unavailable' }, { status: 503 })
+      }
       const runIndex = workflowRuns.length
       const finalText = deliveryTexts[runIndex - 1] ?? `live dogfood final answer ${runIndex}`
       if (externalDeliveryClaimedByService) {
@@ -329,6 +334,7 @@ beforeEach(() => {
   externalDeliveryReferencesAcceptedMessage = true
   externalDeliveryAddsUnrelatedReferencedReply = false
   workflowResponseIncludesExecutionId = true
+  workflowRejectsNextHandoff = false
   liveMessageScheduleDelaysMs = []
 })
 
@@ -579,6 +585,34 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain(
       'PASS Discord reply URL: https://discord.com/channels/guild-1/home-1/home-msg-2'
     )
+  })
+
+  it('fails immediately with handoff evidence when Centaur rejects the target turn', async () => {
+    liveMessages = ['handoff failure turn']
+    workflowRejectsNextHandoff = true
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open handoff-failure dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(false)
+    expect(workflowRuns).toHaveLength(1)
+    expect(discordPosts).toHaveLength(0)
+    expect(delivered).toHaveLength(0)
+    expect(result.observedEvent?.discord.message_id).toBe('live-msg-1')
+    expect(result.handoff).toMatchObject({ ok: false, status: 503 })
+    expect(formatted).toContain('FAIL live Discord chat loop: workflow_handoff_failed:503')
+    expect(formatted).toContain('PASS live Discord message accepted: discord:guild-1:live-thread-1:live-msg-1')
+    expect(formatted).toContain(
+      'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
+    )
+    expect(formatted).toContain('FAIL workflow handoff: 503')
+    expect(formatted).toContain('Verify Centaur API health')
+    expect(formatted).not.toContain('timed out waiting')
+    expect(formatted).not.toContain('PASS Discord reply posted')
   })
 
   it('recovers a fresh Discord message from channel history when Gateway intake misses it', async () => {

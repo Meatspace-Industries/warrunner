@@ -305,6 +305,17 @@ export async function runLiveDogfoodSession(
         handoff: accepted.handoff,
         ...(accepted.executionId ? { executionId: accepted.executionId } : {})
       }
+      if (!accepted.handoff.ok) {
+        return {
+          ok: false,
+          turns,
+          target,
+          observedEvent: accepted.event,
+          handoff: accepted.handoff,
+          error: `workflow_handoff_failed:${accepted.handoff.status}`,
+          hint: 'Verify Centaur API health, DISCORDBOT_API_KEY, and the discord_thread_turn workflow registration.'
+        }
+      }
       opts.onProgress?.(`PASS live Discord message accepted: ${accepted.event.message_id}`)
 
       const observedReply = await waitForReply({
@@ -352,7 +363,7 @@ export function formatLiveDogfood(result: LiveDogfoodResult): string {
     const hint = result.hint ? `\n      ${result.hint}` : ''
     const target = result.target?.discordUrl ? `\nPASS Discord URL: ${result.target.discordUrl}` : ''
     const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
-    const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
+    const handoff = result.handoff ? `\n${workflowHandoffLine(result.handoff)}` : ''
     const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
     const eventUrl = result.observedEvent
       ? acceptedDiscordMessageUrl(result.observedEvent)
@@ -395,7 +406,7 @@ export function formatLiveDogfoodSession(
       ? `\nPASS live ${mode} turns completed: ${result.turns.length}`
       : ''
     const event = result.observedEvent ? `\nPASS live Discord message accepted: ${result.observedEvent.message_id}` : ''
-    const handoff = result.handoff ? `\nPASS workflow handoff: ${result.handoff.status}` : ''
+    const handoff = result.handoff ? `\n${workflowHandoffLine(result.handoff)}` : ''
     const execution = result.executionId ? `\nPASS workflow execution: ${result.executionId}` : ''
     const eventUrl = result.observedEvent
       ? acceptedDiscordMessageUrl(result.observedEvent)
@@ -453,10 +464,8 @@ class ObservingHandoff extends CentaurHandoff implements DiscordHandoff {
       return { ok: true, status: 204, body: { skipped: 'live_non_target_discord_event' } }
     }
     const result = await super.emit(event)
-    if (result.ok) {
-      const executionId = handoffExecutionId(result)
-      this.onAccepted({ event, handoff: result, ...(executionId ? { executionId } : {}) })
-    }
+    const executionId = handoffExecutionId(result)
+    this.onAccepted({ event, handoff: result, ...(executionId ? { executionId } : {}) })
     return result
   }
 }
@@ -994,6 +1003,10 @@ export function discordMessageUrl(
 
 function lineIf(label: string, value: string | undefined): string[] {
   return value ? [`${label}: ${value}`] : []
+}
+
+function workflowHandoffLine(handoff: CentaurHandoffResult): string {
+  return `${handoff.ok ? 'PASS' : 'FAIL'} workflow handoff: ${handoff.status}`
 }
 
 function isForumChannel(channel: DiscordChannel): boolean {
