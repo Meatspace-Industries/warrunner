@@ -13,6 +13,7 @@
     "dogfood:emulated": "bun src/dogfood.ts emulated",
     "dogfood:live": "bun src/dogfood.ts live",
     "dogfood:preflight": "bun src/dogfood.ts preflight",
+    "dogfood:chat": "bun src/dogfood.ts chat",
     "dogfood:session": "bun src/dogfood.ts session",
     "dogfood:smoke": "bun src/dogfood.ts smoke",
     "test": "bun test src/*.test.ts src/**/*.test.ts",

@@ -107,7 +107,7 @@ The lower-level dogfood CLI can also be pointed at the host env file directly:
 
 ```bash
 pnpm --filter discordbot dogfood:preflight -- --dogfood-env-file=/var/lib/meepo/hermes/.env
-pnpm --filter discordbot dogfood:session -- --dogfood-env-file=/var/lib/meepo/hermes/.env --open
+pnpm --filter discordbot dogfood:chat -- --dogfood-env-file=/var/lib/meepo/hermes/.env
 ```
 
 You can also set `WARRUNNER_DOGFOOD_ENV_FILE=/var/lib/meepo/hermes/.env` once
@@ -203,7 +203,11 @@ printed Discord URL as the window to keep chatting with Warrunner. For the
 tightest local loop, run
 `pnpm --filter discordbot dogfood:session -- --open --turns 12 --timeout-ms 600000 <channel-or-forum-id>`.
 For open-ended Discord-window iteration, run
-`pnpm --filter discordbot dogfood:session -- --open --until-timeout --timeout-ms 3600000 <channel-or-forum-id>`.
+`pnpm --filter discordbot dogfood:chat -- <channel-or-forum-id>`.
+The direct `dogfood:chat` command opens Discord by default, keeps accepting
+turns until idle timeout, and uses `WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS` or one
+hour as its default timeout. Pass `--no-open`, `--turns <n>`, or
+`--timeout-ms <ms>` to override that operator loop.
 The Meatspace host wrapper shortens this to
 `just warrunner-live-dogfood chat -- <channel-or-forum-id>`.
 To reattach to an already-open forum thread or home channel without posting a

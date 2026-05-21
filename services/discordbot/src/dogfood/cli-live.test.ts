@@ -286,6 +286,86 @@ describe('dogfood CLI live session', () => {
       await rm(tmp, { recursive: true, force: true })
     }
   })
+
+  it('runs the real chat CLI as an open Discord-window session until idle timeout', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'warrunner-cli-chat-'))
+    const envFile = join(tmp, '.env')
+    const transcriptDir = join(tmp, 'transcripts')
+    try {
+      await writeFile(
+        envFile,
+        [
+          `DISCORD_API_URL=${fakeBaseUrl}`,
+          `CENTAUR_API_URL=${fakeBaseUrl}`,
+          'DISCORD_BOT_TOKEN=discord-token',
+          'DISCORDBOT_API_KEY=centaur-key',
+          'DISCORD_GATEWAY_ENABLED=true',
+          'DISCORD_GUILD_ID=guild-1',
+          'DISCORD_BOT_USER_ID=bot-user',
+          'WARRUNNER_HOME_FORUM_CHANNEL_ID=forum-1',
+          'WARRUNNER_HOME_CHANNEL_ID=',
+          'WARRUNNER_HOME_CHANNEL_IDS=',
+          'WARRUNNER_INTAKE_CHANNEL_IDS=',
+          'DISCORD_FREE_RESPONSE_CHANNELS=',
+          'WARRUNNER_ALLOWED_ROLE_IDS=',
+          'MEEPO_ALLOWED_ROLE_IDS=',
+          'DISCORD_ALLOWED_ROLES=',
+          'WARRUNNER_DOGFOOD_CHAT_TIMEOUT_MS=2000',
+          'WARRUNNER_DISCORDBOT_URL=',
+          'WARRUNNER_HISTORY_LIMIT=10'
+        ].join('\n')
+      )
+
+      const result = await runDogfoodCli([
+        'chat',
+        `--dogfood-env-file=${envFile}`,
+        `--transcript-dir=${transcriptDir}`,
+        '--no-open',
+        '--poll-interval-ms=10',
+        'forum-1',
+        'CLI chat setup prompt'
+      ])
+
+      expect(result.exitCode, `${result.stderr}\n${result.stdout}`).toBe(0)
+      expect(result.stdout).toContain('PASS warrunner dogfood preflight passed')
+      expect(result.stdout).toContain('PASS live Discord dogfood session completed')
+      expect(result.stdout).toContain('PASS turns completed: 2')
+      expect(result.stdout).toContain('PASS stop reason: idle_timeout')
+      expect(result.stdout).toContain('PASS turn 2: second CLI session turn -> reply-msg-2')
+      expect(result.stdout).toContain('PASS dogfood transcript:')
+      expect(result.stdout).not.toContain('PASS opened Discord URL')
+      expect(result.stderr).not.toContain('discord_gateway_connect_failed')
+      expect(result.stderr).not.toContain('final_delivery_poll_failed')
+
+      expect(workflowRuns).toHaveLength(2)
+      expect(discordPosts.map(post => post.body.content)).toEqual([
+        'CLI final answer 1',
+        'CLI final answer 2'
+      ])
+
+      const transcripts = await readdir(transcriptDir)
+      expect(transcripts).toHaveLength(1)
+      expect(transcripts[0]).toContain('session')
+      expect(transcripts[0]).toContain('pass')
+      const transcriptText = await readFile(join(transcriptDir, transcripts[0] ?? ''), 'utf8')
+      const transcript = JSON.parse(transcriptText) as any
+      expect(transcript).toMatchObject({
+        command: 'session',
+        ok: true,
+        stop_reason: 'idle_timeout',
+        target: {
+          requested_channel_id: 'forum-1',
+          conversation_channel_id: 'live-thread-1',
+          discord_url: 'https://discord.com/channels/guild-1/live-thread-1'
+        }
+      })
+      expect(transcript.turns).toHaveLength(2)
+      expect(transcriptText).not.toContain('discord-token')
+      expect(transcriptText).not.toContain('centaur-key')
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
 })
 
 async function runDogfoodCli(args: string[]): Promise<{
