@@ -67,6 +67,24 @@ fi
 echo "$host_preflight_output"
 grep -q "PASS DISCORD_GATEWAY_ENABLED: enabled" <<<"$host_preflight_output"
 grep -q "FAIL DISCORD_BOT_TOKEN: missing" <<<"$host_preflight_output"
+echo
+echo "==> meatspace/scripts/warrunner-live-dogfood.sh session --env-file services/discordbot/.env.example --transcript-dir /dev/null/warrunner --no-open"
+if host_transcript_output="$(
+  meatspace/scripts/warrunner-live-dogfood.sh session \
+    --env-file services/discordbot/.env.example \
+    --transcript-dir /dev/null/warrunner \
+    --no-open 2>&1
+)"; then
+  echo "$host_transcript_output"
+  echo "Expected host dogfood session to fail before pnpm with an unwritable transcript dir." >&2
+  exit 1
+fi
+echo "$host_transcript_output"
+grep -q "Warrunner dogfood transcript dir is not writable: /dev/null/warrunner" <<<"$host_transcript_output"
+if grep -q "dogfood:session" <<<"$host_transcript_output"; then
+  echo "Transcript dir validation should fail before pnpm starts dogfood:session." >&2
+  exit 1
+fi
 run uv run --project services/api pytest -q services/api/tests/test_discordbot_service_config.py
 run helm repo add 1password https://1password.github.io/connect-helm-charts --force-update
 run helm dependency build contrib/chart

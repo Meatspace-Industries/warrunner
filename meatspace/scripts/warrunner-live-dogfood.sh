@@ -51,6 +51,25 @@ require_value() {
   fi
 }
 
+ensure_transcript_dir_writable() {
+  local dir="$1"
+  local probe
+  if ! mkdir -p -m 700 "$dir"; then
+    echo "Warrunner dogfood transcript dir is not writable: $dir" >&2
+    exit 1
+  fi
+  if ! probe="$(mktemp "$dir/.warrunner-transcript-probe.XXXXXX")"; then
+    echo "Warrunner dogfood transcript dir is not writable: $dir" >&2
+    exit 1
+  fi
+  if ! printf 'ok\n' > "$probe"; then
+    rm -f "$probe"
+    echo "Warrunner dogfood transcript dir is not writable: $dir" >&2
+    exit 1
+  fi
+  rm -f "$probe"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     preflight|smoke|live|session)
@@ -133,6 +152,9 @@ Pass --env-file <path> or set WARRUNNER_DOGFOOD_ENV_FILE.
 The Meatspace host default is /var/lib/meepo/hermes/.env.
 EOF
   exit 1
+fi
+if [[ ( "$command" == "live" || "$command" == "session" ) && -n "$transcript_dir" ]]; then
+  ensure_transcript_dir_writable "$transcript_dir"
 fi
 
 script="dogfood:$command"

@@ -79,7 +79,9 @@ To dogfood against an existing Meatspace host environment without copying
 secrets into the repo, use the host wrapper. It defaults to
 `/var/lib/meepo/hermes/.env`, runs from the repo root, opens the Discord target
 automatically for live/session commands, and writes live/session JSON
-transcripts under `/var/lib/meepo/warrunner/dogfood-transcripts`:
+transcripts under `/var/lib/meepo/warrunner/dogfood-transcripts`. For
+live/session commands, it validates transcript directory writability before
+starting pnpm or opening a Discord target:
 
 ```bash
 just warrunner-live-dogfood preflight
