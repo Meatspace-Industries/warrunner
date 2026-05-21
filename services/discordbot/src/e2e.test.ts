@@ -121,6 +121,7 @@ beforeAll(() => {
   env.DISCORD_GATEWAY_ENABLED = 'false'
   env.DISCORD_BOT_TOKEN = 'discord-token'
   env.DISCORD_APPLICATION_ID = 'bot-user'
+  env.DISCORD_BOT_USER_ID = 'bot-user'
   env.DISCORD_GUILD_ID = 'guild-1'
   env.DISCORD_API_URL = fakeBaseUrl
   env.CENTAUR_API_URL = fakeBaseUrl

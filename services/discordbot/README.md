@@ -48,6 +48,17 @@ WARRUNNER_HOME_CHANNEL_IDS=... \
 pnpm --filter discordbot dev
 ```
 
+Before starting the long-running process, run the same environment through the
+preflight:
+
+```bash
+pnpm --filter discordbot dogfood:preflight
+```
+
+The preflight verifies the Discord bot identity, Gateway URL, configured
+forum/home channels, Centaur health, and that `discord_thread_turn` is
+registered by the API.
+
 5. In Discord, create a forum post under the configured home forum channel.
 6. Send a message in that forum thread. Mentioning the bot is optional if the
    thread belongs to the configured home forum.

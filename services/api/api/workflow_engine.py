@@ -1538,6 +1538,19 @@ def get_workflow_handler(
     return _WORKFLOW_HANDLERS.get(workflow_name)
 
 
+def list_registered_workflows() -> list[dict[str, Any]]:
+    """Return registered workflow handlers without exposing callable objects."""
+    return [
+        {
+            "name": name,
+            "source_path": registered.source_path,
+            "version": registered.version,
+            "scheduled": registered.schedule is not None,
+        }
+        for name, registered in sorted(_WORKFLOW_HANDLERS.items())
+    ]
+
+
 # ── Schedule specs ────────────────────────────────────────────────────
 
 

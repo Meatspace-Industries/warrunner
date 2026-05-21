@@ -1,5 +1,5 @@
 import { discordBotToken, type AppConfig } from '../config'
-import type { DiscordChannel, DiscordMessage } from './types'
+import type { DiscordChannel, DiscordMessage, DiscordUser } from './types'
 
 export class DiscordApiError extends Error {
   readonly status: number
@@ -25,6 +25,10 @@ export class DiscordClient {
     const url = typeof body.url === 'string' ? body.url.trim() : ''
     if (!url) throw new Error('Discord gateway response did not include url')
     return url
+  }
+
+  async fetchCurrentUser(): Promise<DiscordUser> {
+    return await this.request<DiscordUser>('/users/@me')
   }
 
   async fetchChannel(channelId: string): Promise<DiscordChannel> {

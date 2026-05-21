@@ -17,6 +17,8 @@ const discord = new DiscordClient(config)
 const channels = new DiscordChannelResolver(discord)
 const handoff = new CentaurHandoff(config)
 
+void hydrateBotUserId()
+
 type Variables = {
   requestId: string
 }
@@ -135,6 +137,19 @@ async function processDiscordMessage(message: DiscordMessage): Promise<void> {
       body: result.body,
       thread_key: normalized.thread_key
     })
+  }
+}
+
+async function hydrateBotUserId(): Promise<void> {
+  if (config.DISCORD_BOT_USER_ID?.trim() || !config.DISCORD_BOT_TOKEN) return
+  try {
+    const user = await discord.fetchCurrentUser()
+    if (user.id) {
+      config.DISCORD_BOT_USER_ID = user.id
+      logInfo('discord_bot_identity_loaded', { id: user.id, username: user.username })
+    }
+  } catch (error) {
+    logWarn('discord_bot_identity_load_failed', error)
   }
 }
 
