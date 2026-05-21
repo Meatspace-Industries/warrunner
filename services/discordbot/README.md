@@ -46,7 +46,6 @@ DISCORD_BOT_TOKEN=... \
 DISCORDBOT_API_KEY=... \
 CENTAUR_API_URL=http://localhost:8000 \
 DISCORD_GUILD_ID=... \
-DISCORD_BOT_USER_ID=... \
 WARRUNNER_HOME_FORUM_CHANNEL_ID=... \
 WARRUNNER_HOME_CHANNEL_IDS=... \
 pnpm --filter discordbot dev
@@ -62,6 +61,10 @@ pnpm --filter discordbot dogfood:preflight
 The preflight verifies the Discord bot identity, Gateway URL, configured
 forum/home channels, Centaur health, and that `discord_thread_turn` is
 registered by the API.
+
+`DISCORD_BOT_USER_ID` is optional; Discordbot infers it from the bot token
+before processing inbound messages. Setting it explicitly avoids that startup
+lookup.
 
 5. In Discord, create a forum post under the configured home forum channel.
 6. Send a message in that forum thread. Mentioning the bot is optional if the

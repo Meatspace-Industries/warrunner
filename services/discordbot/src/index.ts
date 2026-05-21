@@ -22,8 +22,12 @@ const processDiscordMessage = createDiscordMessageProcessor({
   channels,
   handoff
 })
+const botIdentityReady = hydrateBotUserId()
 
-void hydrateBotUserId()
+async function processReadyDiscordMessage(message: DiscordMessage): Promise<void> {
+  await botIdentityReady
+  await processDiscordMessage(message)
+}
 
 type Variables = {
   requestId: string
@@ -77,7 +81,7 @@ app.post('/api/discord/events', apiKeyMiddleware, async c => {
   const body = await c.req.json<DiscordGatewayPayload | DiscordMessage>()
   const message = unwrapMessageCreate(body)
   if (!message) return c.json({ ok: false, error: 'unsupported_discord_event' }, 400)
-  runInBackground(c, processDiscordMessage(message))
+  runInBackground(c, processReadyDiscordMessage(message))
   return c.json({ ok: true })
 })
 
@@ -98,7 +102,7 @@ startDiscordGateway({
   config,
   client: discord,
   channelResolver: channels,
-  onMessage: processDiscordMessage
+  onMessage: processReadyDiscordMessage
 })
 
 export default {

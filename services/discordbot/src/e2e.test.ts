@@ -18,6 +18,13 @@ const server = Bun.serve({
   port: 0,
   async fetch(request) {
     const url = new URL(request.url)
+    if (url.pathname === '/users/@me' && request.method === 'GET') {
+      return Response.json({
+        id: 'bot-user',
+        username: 'warrunner',
+        bot: true
+      })
+    }
     if (url.pathname === '/channels/thread-1' && request.method === 'GET') {
       return Response.json({
         id: 'thread-1',
@@ -120,8 +127,8 @@ beforeAll(() => {
   env.NODE_ENV = 'test'
   env.DISCORD_GATEWAY_ENABLED = 'false'
   env.DISCORD_BOT_TOKEN = 'discord-token'
-  env.DISCORD_APPLICATION_ID = 'bot-user'
-  env.DISCORD_BOT_USER_ID = 'bot-user'
+  delete env.DISCORD_APPLICATION_ID
+  delete env.DISCORD_BOT_USER_ID
   env.DISCORD_GUILD_ID = 'guild-1'
   env.DISCORD_API_URL = fakeBaseUrl
   env.CENTAUR_API_URL = fakeBaseUrl
