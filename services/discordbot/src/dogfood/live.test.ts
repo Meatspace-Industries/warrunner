@@ -47,9 +47,11 @@ let liveMessageCursor = 0
 let liveMessages: string[] = []
 let deliveryTexts: string[] = []
 let injectStaleDeliveryBeforeNext = false
+let injectUnrelatedDeliveryBeforeNext = false
 let dropExpectedDeliveryAfterStale = false
 let externalDeliveryClaimedByService = false
 let externalDeliveryReferencesAcceptedMessage = true
+let workflowResponseIncludesExecutionId = true
 let liveMessageTimers: Array<ReturnType<typeof setTimeout>> = []
 
 const server = Bun.serve({
@@ -220,6 +222,20 @@ const server = Bun.serve({
           return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
         }
       }
+      if (injectUnrelatedDeliveryBeforeNext) {
+        injectUnrelatedDeliveryBeforeNext = false
+        pendingDeliveries.push({
+          execution_id: `unrelated-exec-${runIndex}`,
+          thread_key: captured.body.input.thread_key,
+          delivery: {
+            ...captured.body.input.delivery,
+            message_id: 'unrelated-msg-1'
+          },
+          final_payload: {
+            result_text: 'unrelated same-channel final answer'
+          }
+        })
+      }
       pendingDeliveries.push({
         execution_id: `exec-${runIndex}`,
         thread_key: captured.body.input.thread_key,
@@ -228,7 +244,11 @@ const server = Bun.serve({
           result_text: finalText
         }
       })
-      return Response.json({ ok: true, run_id: `run-${runIndex}`, execution_id: `exec-${runIndex}` })
+      return Response.json({
+        ok: true,
+        run_id: `run-${runIndex}`,
+        ...(workflowResponseIncludesExecutionId ? { execution_id: `exec-${runIndex}` } : {})
+      })
     }
     if (url.pathname === '/agent/final-deliveries/claim' && request.method === 'POST') {
       await request.json()
@@ -285,9 +305,11 @@ beforeEach(() => {
   liveMessages = ['live dogfood from Discord']
   deliveryTexts = ['live dogfood final answer']
   injectStaleDeliveryBeforeNext = false
+  injectUnrelatedDeliveryBeforeNext = false
   dropExpectedDeliveryAfterStale = false
   externalDeliveryClaimedByService = false
   externalDeliveryReferencesAcceptedMessage = true
+  workflowResponseIncludesExecutionId = true
 })
 
 afterAll(() => {
@@ -746,6 +768,40 @@ describe('live dogfood chat loop', () => {
       '/agent/final-deliveries/exec-1/delivered'
     ])
     expect(formatted).toContain('PASS workflow execution: exec-1')
+    expect(formatted).toContain('PASS Discord reply posted: reply-msg-2')
+  })
+
+  it('falls back to Discord message-reference correlation when handoff omits execution id', async () => {
+    liveMessages = ['message-reference-correlated session turn']
+    deliveryTexts = ['message-reference-correlated final answer']
+    injectUnrelatedDeliveryBeforeNext = true
+    workflowResponseIncludesExecutionId = false
+    const result = await runLiveDogfood(testConfig(), {
+      channelId: 'forum-1',
+      content: 'open message-reference-correlated dogfood',
+      timeoutMs: 5_000,
+      pollIntervalMs: 10
+    })
+    const formatted = formatLiveDogfood(result)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected live dogfood to pass')
+    expect(result.executionId).toBeUndefined()
+    expect(result.reply.message.id).toBe('reply-msg-2')
+    expect(result.reply.content).toBe('message-reference-correlated final answer')
+    expect(discordPosts.map(post => post.body.content)).toEqual([
+      'unrelated same-channel final answer',
+      'message-reference-correlated final answer'
+    ])
+    expect(discordPosts.map(post => post.body.message_reference?.message_id)).toEqual([
+      'unrelated-msg-1',
+      'live-msg-1'
+    ])
+    expect(delivered.map(item => item.path)).toEqual([
+      '/agent/final-deliveries/unrelated-exec-1/delivered',
+      '/agent/final-deliveries/exec-1/delivered'
+    ])
+    expect(formatted).not.toContain('PASS workflow execution:')
     expect(formatted).toContain('PASS Discord reply posted: reply-msg-2')
   })
 

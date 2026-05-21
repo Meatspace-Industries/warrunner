@@ -493,11 +493,15 @@ class ObservingDiscordClient extends DiscordClient {
     body: DiscordCreateMessageBody
   ): Promise<DiscordMessage> {
     const message = await super.createMessage(channelId, body)
+    const observedMessage =
+      body.message_reference && !message.message_reference
+        ? { ...message, message_reference: body.message_reference }
+        : message
     if (this.replyObserverArmed) {
       this.observedReplies.push({
         channelId,
         content: body.content,
-        message
+        message: observedMessage
       })
     }
     return message
@@ -543,11 +547,14 @@ class FinalDeliveryReplyTracker {
   take(opts: {
     executionId?: string
     channelId: string
+    acceptedMessageId: string
     fromIndex: number
   }): { reply: ObservedReply; index: number } | undefined {
     const index = this.replies.findIndex(
       item =>
-        (!opts.executionId || item.executionId === opts.executionId) &&
+        (opts.executionId
+          ? item.executionId === opts.executionId
+          : referencesDiscordMessage(item.reply.message, opts.acceptedMessageId)) &&
         item.reply.channelId === opts.channelId &&
         item.firstIndex >= opts.fromIndex
     )
@@ -710,6 +717,7 @@ async function waitForReply(opts: {
     const cached = opts.finalDeliveryReplies.take({
       executionId: opts.executionId,
       channelId: opts.channelId,
+      acceptedMessageId: opts.afterMessageId,
       fromIndex: opts.fromIndex
     })
     if (cached) return cached
@@ -719,6 +727,7 @@ async function waitForReply(opts: {
     const delivered = opts.finalDeliveryReplies.take({
       executionId: opts.executionId,
       channelId: opts.channelId,
+      acceptedMessageId: opts.afterMessageId,
       fromIndex: opts.fromIndex
     })
     if (delivered) return delivered
