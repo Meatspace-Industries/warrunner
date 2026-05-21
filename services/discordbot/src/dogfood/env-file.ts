@@ -1,16 +1,20 @@
 export type DogfoodEnv = NodeJS.ProcessEnv & {
   WARRUNNER_DOGFOOD_ENV_FILE?: string
   WARRUNNER_DOGFOOD_OPEN_DISCORD?: string
+  WARRUNNER_DOGFOOD_TRANSCRIPT_DIR?: string
 }
 
 export type DogfoodGlobalArgs = {
   envFile?: string
+  transcriptDir?: string
   positional: string[]
   error?: string
 }
 
 const ENV_FILE_FLAGS = ['--env-file', '--dogfood-env-file', '--warrunner-env-file'] as const
 const ENV_FILE_PREFIXES = ENV_FILE_FLAGS.map(flag => `${flag}=`)
+const TRANSCRIPT_DIR_FLAGS = ['--transcript-dir', '--dogfood-transcript-dir'] as const
+const TRANSCRIPT_DIR_PREFIXES = TRANSCRIPT_DIR_FLAGS.map(flag => `${flag}=`)
 
 export function parseDogfoodGlobalArgs(
   args: string[],
@@ -18,6 +22,7 @@ export function parseDogfoodGlobalArgs(
 ): DogfoodGlobalArgs {
   const positional: string[] = []
   let envFile = env.WARRUNNER_DOGFOOD_ENV_FILE?.trim() || undefined
+  let transcriptDir: string | undefined
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
     if (arg === undefined) continue
@@ -36,13 +41,31 @@ export function parseDogfoodGlobalArgs(
       envFile = value
       continue
     }
+    if (isTranscriptDirFlag(arg)) {
+      const value = args[index + 1]?.trim()
+      if (!value || value.startsWith('--')) return { positional, error: `${arg} requires a path` }
+      transcriptDir = value
+      index += 1
+      continue
+    }
+    const transcriptPrefix = TRANSCRIPT_DIR_PREFIXES.find(candidate => arg.startsWith(candidate))
+    if (transcriptPrefix) {
+      const value = arg.slice(transcriptPrefix.length).trim()
+      if (!value) return { positional, error: `${transcriptPrefix.slice(0, -1)} requires a path` }
+      transcriptDir = value
+      continue
+    }
     positional.push(arg)
   }
-  return { ...(envFile ? { envFile } : {}), positional }
+  return { ...(envFile ? { envFile } : {}), ...(transcriptDir ? { transcriptDir } : {}), positional }
 }
 
 function isEnvFileFlag(arg: string): boolean {
   return ENV_FILE_FLAGS.some(flag => arg === flag)
+}
+
+function isTranscriptDirFlag(arg: string): boolean {
+  return TRANSCRIPT_DIR_FLAGS.some(flag => arg === flag)
 }
 
 export async function loadDogfoodEnv(

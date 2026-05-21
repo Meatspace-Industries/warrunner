@@ -77,8 +77,9 @@ pnpm --filter discordbot dogfood:preflight
 
 To dogfood against an existing Meatspace host environment without copying
 secrets into the repo, use the host wrapper. It defaults to
-`/var/lib/meepo/hermes/.env`, runs from the repo root, and opens the Discord
-target automatically for live/session commands:
+`/var/lib/meepo/hermes/.env`, runs from the repo root, opens the Discord target
+automatically for live/session commands, and writes live/session JSON
+transcripts under `/var/lib/meepo/warrunner/dogfood-transcripts`:
 
 ```bash
 just warrunner-live-dogfood preflight
@@ -101,6 +102,8 @@ pnpm --filter discordbot dogfood:session -- --dogfood-env-file=/var/lib/meepo/he
 You can also set `WARRUNNER_DOGFOOD_ENV_FILE=/var/lib/meepo/hermes/.env` once
 and omit the flag. The direct Bun CLI also accepts `--env-file`; prefer
 `--dogfood-env-file` with pnpm because pnpm reserves `--env-file`.
+Set `WARRUNNER_DOGFOOD_TRANSCRIPT_DIR`, or pass `--transcript-dir`, to write a
+live/session JSON transcript somewhere else under `/var/lib/meepo`.
 
 Warrunner accepts the existing Meepo Discord aliases when the Warrunner-specific
 values are not set: `MEEPO_DISCORD_GUILD_ID` for `DISCORD_GUILD_ID`,
@@ -148,6 +151,10 @@ the created thread or home channel. Set `WARRUNNER_DOGFOOD_LIVE_TIMEOUT_MS` to
 change the default 180-second wait.
 Pass `--open`, or set `WARRUNNER_DOGFOOD_OPEN_DISCORD=true`, to open the printed
 Discord URL automatically when the live target is ready.
+Pass `--transcript-dir <dir>`, or set `WARRUNNER_DOGFOOD_TRANSCRIPT_DIR`, to
+write a JSON transcript containing the target URL, accepted Discord message ids,
+handoff statuses, and Discord reply ids/content. The Meatspace host wrapper
+defaults this to `/var/lib/meepo/warrunner/dogfood-transcripts`.
 
 For iterative dogfooding from the Discord window, run a short live session:
 

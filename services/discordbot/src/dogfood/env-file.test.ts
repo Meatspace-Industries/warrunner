@@ -5,11 +5,18 @@ describe('dogfood env-file args', () => {
   it('strips env-file flags before command-specific argument parsing', () => {
     expect(
       parseDogfoodGlobalArgs(
-        ['--', '--dogfood-env-file=/var/lib/meepo/hermes/.env', '--open', 'forum-1'],
+        [
+          '--',
+          '--dogfood-env-file=/var/lib/meepo/hermes/.env',
+          '--transcript-dir=/var/lib/meepo/warrunner/dogfood-transcripts',
+          '--open',
+          'forum-1'
+        ],
         {}
       )
     ).toEqual({
       envFile: '/var/lib/meepo/hermes/.env',
+      transcriptDir: '/var/lib/meepo/warrunner/dogfood-transcripts',
       positional: ['--open', 'forum-1']
     })
   })
@@ -33,6 +40,10 @@ describe('dogfood env-file args', () => {
     expect(parseDogfoodGlobalArgs(['--dogfood-env-file='])).toEqual({
       positional: [],
       error: '--dogfood-env-file requires a path'
+    })
+    expect(parseDogfoodGlobalArgs(['--transcript-dir'])).toEqual({
+      positional: [],
+      error: '--transcript-dir requires a path'
     })
   })
 })

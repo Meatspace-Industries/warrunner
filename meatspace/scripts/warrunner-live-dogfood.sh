@@ -19,6 +19,10 @@ Options:
   --env-file=<path>          Same as --env-file <path>.
   --dogfood-env-file <path>  Alias for --env-file.
   --dogfood-env-file=<path>  Alias for --env-file=<path>.
+  --transcript-dir <path>    Directory for live/session JSON transcripts.
+                            Default: /var/lib/meepo/warrunner/dogfood-transcripts
+  --transcript-dir=<path>    Same as --transcript-dir <path>.
+  --no-transcript            Disable live/session transcript writing.
   --open                    Open the printed Discord URL for live/session.
   --no-open                 Do not open Discord automatically.
   -h, --help                Show this help.
@@ -32,6 +36,7 @@ USAGE
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 env_file="${WARRUNNER_DOGFOOD_ENV_FILE:-/var/lib/meepo/hermes/.env}"
+transcript_dir="${WARRUNNER_DOGFOOD_TRANSCRIPT_DIR:-/var/lib/meepo/warrunner/dogfood-transcripts}"
 command=""
 open_discord=1
 open_explicit=0
@@ -64,6 +69,20 @@ while [[ $# -gt 0 ]]; do
     --env-file=*|--dogfood-env-file=*)
       env_file="${1#*=}"
       require_value "${1%%=*}" "$env_file"
+      shift
+      ;;
+    --transcript-dir|--dogfood-transcript-dir)
+      require_value "$1" "${2:-}"
+      transcript_dir="$2"
+      shift 2
+      ;;
+    --transcript-dir=*|--dogfood-transcript-dir=*)
+      transcript_dir="${1#*=}"
+      require_value "${1%%=*}" "$transcript_dir"
+      shift
+      ;;
+    --no-transcript)
+      transcript_dir=""
       shift
       ;;
     --open|--open-discord)
@@ -99,6 +118,12 @@ case "$env_file" in
   /*) ;;
   *) env_file="$repo_root/$env_file" ;;
 esac
+if [[ -n "$transcript_dir" ]]; then
+  case "$transcript_dir" in
+    /*) ;;
+    *) transcript_dir="$repo_root/$transcript_dir" ;;
+  esac
+fi
 
 if [[ ! -r "$env_file" ]]; then
   cat >&2 <<EOF
@@ -112,6 +137,9 @@ fi
 
 script="dogfood:$command"
 dogfood_args=(--dogfood-env-file="$env_file")
+if [[ ( "$command" == "live" || "$command" == "session" ) && -n "$transcript_dir" ]]; then
+  dogfood_args+=(--transcript-dir="$transcript_dir")
+fi
 if [[ ( "$command" == "live" || "$command" == "session" ) && "$open_discord" == 1 && "$open_explicit" == 0 ]]; then
   dogfood_args+=(--open)
 fi
@@ -119,4 +147,7 @@ fi
 cd "$repo_root"
 echo "==> Warrunner live dogfood command: $command"
 echo "==> Warrunner dogfood env file: $env_file"
+if [[ ( "$command" == "live" || "$command" == "session" ) && -n "$transcript_dir" ]]; then
+  echo "==> Warrunner dogfood transcript dir: $transcript_dir"
+fi
 exec pnpm --filter discordbot "$script" -- "${dogfood_args[@]}" "${passthrough[@]+"${passthrough[@]}"}"

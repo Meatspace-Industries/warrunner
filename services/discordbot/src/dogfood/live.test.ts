@@ -1,4 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, setDefaultTimeout } from 'bun:test'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { loadConfig, type AppConfig } from '../config'
 import type { DiscordGatewayPayload } from '../discord/types'
 import {
@@ -7,6 +10,7 @@ import {
   runLiveDogfood,
   runLiveDogfoodSession
 } from './live'
+import { writeDogfoodTranscript } from './transcript'
 
 setDefaultTimeout(10_000)
 
@@ -343,6 +347,62 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain('PASS Discord URL: https://discord.com/channels/guild-1/live-thread-1')
     expect(formatted).toContain('PASS turns completed: 2')
     expect(formatted).toContain('PASS turn 2: second session turn -> reply-msg-2')
+  })
+
+  it('writes a live session transcript without auth secrets', async () => {
+    liveMessages = ['first transcript turn', 'second transcript turn']
+    const transcriptDir = await mkdtemp(join(tmpdir(), 'warrunner-dogfood-'))
+    try {
+      const result = await runLiveDogfoodSession(testConfig(), {
+        channelId: 'forum-1',
+        content: 'open transcript dogfood',
+        turnLimit: 2,
+        timeoutMs: 5_000,
+        pollIntervalMs: 10
+      })
+      const written = await writeDogfoodTranscript({
+        command: 'session',
+        result,
+        transcriptDir,
+        now: new Date('2026-05-21T20:00:00.000Z')
+      })
+
+      expect(written.ok).toBe(true)
+      if (!written.ok || 'skipped' in written) throw new Error('transcript was not written')
+      expect(written.path).toEndWith('warrunner-dogfood-session-2026-05-21T20-00-00-000Z-pass.json')
+      const transcriptText = await readFile(written.path, 'utf8')
+      const transcript = JSON.parse(transcriptText)
+      expect(transcript).toMatchObject({
+        schema_version: 1,
+        command: 'session',
+        ok: true,
+        target: {
+          requested_channel_id: 'forum-1',
+          conversation_channel_id: 'live-thread-1',
+          discord_url: 'https://discord.com/channels/guild-1/live-thread-1'
+        },
+        turns: [
+          {
+            index: 1,
+            message_id: 'discord:guild-1:live-thread-1:live-msg-1',
+            text: 'first transcript turn',
+            handoff: { ok: true, status: 200 },
+            reply: { channel_id: 'live-thread-1', message_id: 'reply-msg-1' }
+          },
+          {
+            index: 2,
+            message_id: 'discord:guild-1:live-thread-1:live-msg-2',
+            text: 'second transcript turn',
+            handoff: { ok: true, status: 200 },
+            reply: { channel_id: 'live-thread-1', message_id: 'reply-msg-2' }
+          }
+        ]
+      })
+      expect(transcriptText).not.toContain('discord-token')
+      expect(transcriptText).not.toContain('centaur-key')
+    } finally {
+      await rm(transcriptDir, { recursive: true, force: true })
+    }
   })
 
   it('counts chunked Discord final-delivery replies as one live session turn', async () => {

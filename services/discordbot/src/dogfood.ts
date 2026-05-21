@@ -7,10 +7,13 @@ import {
   formatLiveDogfood,
   formatLiveDogfoodSession,
   runLiveDogfood,
-  runLiveDogfoodSession
+  runLiveDogfoodSession,
+  type LiveDogfoodResult,
+  type LiveDogfoodSessionResult
 } from './dogfood/live'
 import { liveProgressReporter, parseDogfoodCliArgs } from './dogfood/operator'
 import { formatSmokePost, runSmokePost } from './dogfood/smoke'
+import { writeDogfoodTranscript } from './dogfood/transcript'
 
 type Check = {
   name: string
@@ -120,6 +123,7 @@ if (import.meta.main) {
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfood(result))
+    await reportDogfoodTranscript('live', result, globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR)
     process.exit(result.ok ? 0 : 1)
   }
   if (command === 'session') {
@@ -141,6 +145,11 @@ if (import.meta.main) {
       onProgress: liveProgressReporter({ openDiscord: args.openDiscord })
     })
     console.log(formatLiveDogfoodSession(result))
+    await reportDogfoodTranscript(
+      'session',
+      result,
+      globalArgs.transcriptDir ?? env.WARRUNNER_DOGFOOD_TRANSCRIPT_DIR
+    )
     process.exit(result.ok ? 0 : 1)
   }
   if (command !== 'preflight') {
@@ -188,6 +197,20 @@ function addRequiredConfigChecks(config: AppConfig, checks: Check[]): void {
     hint:
       'Set WARRUNNER_HOME_FORUM_CHANNEL_ID, WARRUNNER_HOME_CHANNEL_IDS, or WARRUNNER_INTAKE_CHANNEL_IDS. Existing Meepo envs may use MEEPO_FORUM_CHANNEL_ID or DISCORD_FREE_RESPONSE_CHANNELS.'
   })
+}
+
+async function reportDogfoodTranscript(
+  command: 'live' | 'session',
+  result: LiveDogfoodResult | LiveDogfoodSessionResult,
+  transcriptDir: string | undefined
+): Promise<void> {
+  const transcript = await writeDogfoodTranscript({ command, result, transcriptDir })
+  if ('skipped' in transcript) return
+  if (transcript.ok) {
+    console.log(`PASS dogfood transcript: ${transcript.path}`)
+  } else {
+    console.error(`WARN dogfood transcript failed: ${transcript.error}`)
+  }
 }
 
 async function checkDiscordIdentity(
