@@ -59,6 +59,23 @@ export class DiscordClient {
     })
   }
 
+  async createForumThread(
+    channelId: string,
+    body: {
+      name: string
+      message: { content: string; allowed_mentions?: { parse: string[] } }
+      applied_tags?: string[]
+    }
+  ): Promise<DiscordChannel & { message?: DiscordMessage }> {
+    return await this.request<DiscordChannel & { message?: DiscordMessage }>(
+      `/channels/${encodeURIComponent(channelId)}/threads`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body)
+      }
+    )
+  }
+
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = discordBotToken(this.config)
     if (!token) throw new Error('DISCORD_BOT_TOKEN is not configured')

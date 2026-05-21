@@ -6,6 +6,7 @@ import { formatSmokePost, runSmokePost } from './dogfood/smoke'
 
 const centaurAuthHeaders: string[] = []
 const smokePosts: Array<{ authorization: string; body: any }> = []
+const forumThreads: Array<{ authorization: string; body: any }> = []
 
 const server = Bun.serve({
   port: 0,
@@ -47,6 +48,27 @@ const server = Bun.serve({
         body: await request.json()
       })
       return Response.json({ id: 'smoke-msg-1', channel_id: 'smoke-1' })
+    }
+    if (url.pathname === '/channels/forum-1/threads' && request.method === 'POST') {
+      forumThreads.push({
+        authorization: request.headers.get('authorization') ?? '',
+        body: await request.json()
+      })
+      return Response.json({
+        id: 'forum-thread-1',
+        type: 11,
+        name: 'Warrunner dogfood smoke',
+        parent_id: 'forum-1',
+        guild_id: 'guild-1',
+        message: {
+          id: 'forum-msg-1',
+          channel_id: 'forum-thread-1',
+          guild_id: 'guild-1',
+          content: 'smoke the forum path',
+          author: { id: 'bot-user', bot: true },
+          attachments: []
+        }
+      })
     }
     if (url.pathname === '/health' && request.method === 'GET') {
       return Response.json({ status: 'ok' })
@@ -119,13 +141,35 @@ describe('dogfood smoke post', () => {
     expect(formatted).toContain('PASS Discord smoke post: #dogfood-smoke (smoke-1)')
   })
 
-  it('rejects direct posts to forum channels', async () => {
+  it('creates a smoke thread in forum channels', async () => {
     smokePosts.length = 0
-    const result = await runSmokePost(testConfig(), { channelId: 'forum-1' })
+    forumThreads.length = 0
+    const result = await runSmokePost(testConfig(), {
+      channelId: 'forum-1',
+      content: 'smoke the forum path',
+      appliedTagIds: ['tag-1']
+    })
+    const formatted = formatSmokePost(result)
 
-    expect(result.ok).toBe(false)
-    expect(formatSmokePost(result)).toContain('channel_not_postable:guild_forum')
+    expect(result.ok).toBe(true)
     expect(smokePosts).toHaveLength(0)
+    expect(forumThreads).toEqual([
+      {
+        authorization: 'Bot discord-token',
+        body: {
+          name: 'Warrunner dogfood smoke',
+          message: {
+            content: 'smoke the forum path',
+            allowed_mentions: { parse: [] }
+          },
+          applied_tags: ['tag-1']
+        }
+      }
+    ])
+    expect(formatted).toContain(
+      'PASS Discord smoke forum thread: #warrunner-forum -> Warrunner dogfood smoke (forum-thread-1)'
+    )
+    expect(formatted).toContain('PASS message id: forum-msg-1')
   })
 })
 

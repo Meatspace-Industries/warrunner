@@ -79,7 +79,8 @@ if (import.meta.main) {
     const contentArgs = argChannelId ? process.argv.slice(4) : process.argv.slice(3)
     const result = await runSmokePost(loadConfig(), {
       channelId,
-      content: contentArgs.join(' ')
+      content: contentArgs.join(' '),
+      appliedTagIds: splitList(process.env.WARRUNNER_DOGFOOD_SMOKE_TAG_IDS ?? '')
     })
     console.log(formatSmokePost(result))
     process.exit(result.ok ? 0 : 1)
@@ -287,4 +288,11 @@ function addCheck(checks: Check[], check: Check): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function splitList(value: string): string[] {
+  return value
+    .split(/[\s,]+/)
+    .map(part => part.trim())
+    .filter(Boolean)
 }

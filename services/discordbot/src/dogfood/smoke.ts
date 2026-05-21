@@ -5,13 +5,15 @@ import type { DiscordChannel, DiscordMessage } from '../discord/types'
 type SmokePostOptions = {
   channelId?: string
   content?: string
+  appliedTagIds?: string[]
 }
 
 export type SmokePostResult =
   | {
       ok: true
       channel: DiscordChannel
-      message: DiscordMessage
+      createdThread?: DiscordChannel
+      message?: DiscordMessage
       content: string
     }
   | {
@@ -21,8 +23,10 @@ export type SmokePostResult =
     }
 
 const DEFAULT_SMOKE_CONTENT = 'Warrunner dogfood smoke check: Discord write path is live.'
+const DEFAULT_SMOKE_THREAD_NAME = 'Warrunner dogfood smoke'
 
 const POSTABLE_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12])
+const FORUM_CHANNEL_TYPES = new Set([15, 16])
 
 const CHANNEL_TYPES: Record<number, string> = {
   0: 'guild_text',
@@ -52,11 +56,22 @@ export async function runSmokePost(
   try {
     await discord.fetchCurrentUser()
     const channel = await discord.fetchChannel(channelId)
+    if (FORUM_CHANNEL_TYPES.has(channel.type)) {
+      const createdThread = await discord.createForumThread(channel.id, {
+        name: DEFAULT_SMOKE_THREAD_NAME,
+        message: {
+          content,
+          allowed_mentions: { parse: [] }
+        },
+        ...((opts.appliedTagIds ?? []).length ? { applied_tags: opts.appliedTagIds } : {})
+      })
+      return { ok: true, channel, createdThread, message: createdThread.message, content }
+    }
     if (!POSTABLE_CHANNEL_TYPES.has(channel.type)) {
       return {
         ok: false,
         error: `channel_not_postable:${channelTypeName(channel.type)}`,
-        hint: 'Use a text channel, announcement channel, or an existing thread id. Forum channel ids cannot receive messages directly.'
+        hint: 'Use a text channel, announcement channel, existing thread id, forum channel, or media channel.'
       }
     }
     const message = await discord.createMessage(channel.id, {
@@ -84,9 +99,18 @@ export function formatSmokePost(result: SmokePostResult): string {
     return `FAIL Discord smoke post: ${result.error}${hint}`
   }
   const channelName = result.channel.name ? `#${result.channel.name}` : result.channel.id
+  if (result.createdThread) {
+    const threadName = result.createdThread.name ?? result.createdThread.id
+    const messageId = result.message?.id ?? '(created with thread)'
+    return [
+      `PASS Discord smoke forum thread: ${channelName} -> ${threadName} (${result.createdThread.id})`,
+      `PASS message id: ${messageId}`,
+      `PASS content: ${result.content}`
+    ].join('\n')
+  }
   return [
     `PASS Discord smoke post: ${channelName} (${result.channel.id})`,
-    `PASS message id: ${result.message.id}`,
+    `PASS message id: ${result.message?.id ?? '(missing)'}`,
     `PASS content: ${result.content}`
   ].join('\n')
 }
