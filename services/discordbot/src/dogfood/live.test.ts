@@ -664,6 +664,8 @@ describe('live dogfood chat loop', () => {
       'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
     )
     expect(formatted).toContain('PASS workflow execution: exec-1')
+    expect(formatted).toContain('Discord rejected the final reply post.')
+    expect(formatted).toContain('Verify the bot can send messages in the target channel/thread')
     expect(formatted).not.toContain('timed out waiting for a Discord final-delivery reply')
   })
 
@@ -694,6 +696,7 @@ describe('live dogfood chat loop', () => {
     expect(formatted).toContain(
       'PASS Discord message URL: https://discord.com/channels/guild-1/live-thread-1/live-msg-1'
     )
+    expect(formatted).toContain('Discord rejected the final reply post.')
     expect(formatted).not.toContain('PASS workflow execution:')
     expect(formatted).not.toContain('timed out waiting for a Discord final-delivery reply')
   })
@@ -1165,6 +1168,7 @@ describe('live dogfood chat loop', () => {
       )
       expect(formatted).toContain('PASS workflow handoff: 200')
       expect(formatted).toContain('PASS workflow execution: exec-1')
+      expect(formatted).toContain('The Discord turn was accepted, but no matching reply was observed.')
       expect(formatted).not.toContain('PASS Discord reply posted')
 
       const written = await writeDogfoodTranscript({

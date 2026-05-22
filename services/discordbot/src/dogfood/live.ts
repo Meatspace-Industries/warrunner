@@ -343,6 +343,7 @@ export async function runLiveDogfoodSession(
 
     return { ok: true, target, turns, stopReason: 'turn_limit' }
   } catch (error) {
+    const message = errorMessage(error)
     return {
       ok: false,
       turns,
@@ -350,8 +351,8 @@ export async function runLiveDogfoodSession(
       ...(acceptedTurn ? { observedEvent: acceptedTurn.observedEvent } : {}),
       ...(acceptedTurn ? { handoff: acceptedTurn.handoff } : {}),
       ...(acceptedTurn?.executionId ? { executionId: acceptedTurn.executionId } : {}),
-      error: error instanceof Error ? error.message : String(error),
-      hint: 'Keep this command running while you send a real message in Discord. Verify Centaur workers can produce final deliveries.'
+      error: message,
+      hint: liveDogfoodFailureHint(message)
     }
   } finally {
     gatewayHandle?.stop()
@@ -782,6 +783,22 @@ function matchingFinalDeliveryFailure(
 function finalDeliveryFailureError(failure: FailedFinalDelivery): string {
   const detail = failure.errorClass ? `${failure.errorClass}: ${failure.error}` : failure.error
   return `final_delivery_failed:${failure.executionId}: ${detail}`
+}
+
+function liveDogfoodFailureHint(error: string): string {
+  if (error.startsWith('final_delivery_failed:')) {
+    return [
+      'Discord rejected the final reply post.',
+      'Verify the bot can send messages in the target channel/thread, the thread is not archived or locked, and Discord delivery metadata points at the accepted message.'
+    ].join(' ')
+  }
+  if (error.startsWith('timed out waiting for a Discord final-delivery reply')) {
+    return [
+      'The Discord turn was accepted, but no matching reply was observed.',
+      'Verify Centaur workers are running, final deliveries are being claimed, and replies reference the accepted Discord message.'
+    ].join(' ')
+  }
+  return 'Keep this command running while you send a real message in Discord. Verify Centaur workers can produce final deliveries.'
 }
 
 async function observeBotReplyFromDiscord(opts: {
