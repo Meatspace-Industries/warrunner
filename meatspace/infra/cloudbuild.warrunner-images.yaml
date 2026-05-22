@@ -1,0 +1,69 @@
+substitutions:
+  _LOCATION: us-west1
+  _REPOSITORY: warrunner
+  _TAG: dev
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -t
+      - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/centaur-api:${_TAG}
+      - -f
+      - services/api/Dockerfile
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -t
+      - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/centaur-agent:${_TAG}
+      - --target
+      - sandbox
+      - -f
+      - services/sandbox/Dockerfile
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -t
+      - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/centaur-iron-proxy:${_TAG}
+      - -f
+      - services/iron-proxy/Dockerfile
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -t
+      - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/warrunner-discordbot:${_TAG}
+      - -f
+      - services/discordbot/Dockerfile
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -t
+      - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/warrunner-overlay:${_TAG}
+      - -f
+      - meatspace/overlay/Dockerfile
+      - meatspace/overlay
+
+images:
+  - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/centaur-api:${_TAG}
+  - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/centaur-agent:${_TAG}
+  - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/centaur-iron-proxy:${_TAG}
+  - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/warrunner-discordbot:${_TAG}
+  - ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/warrunner-overlay:${_TAG}

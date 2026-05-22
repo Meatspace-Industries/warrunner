@@ -44,7 +44,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # ── Non-root agent user ─────────────────────────────────────────────────────
 RUN useradd -m -s /bin/bash -u 1001 agent \
-    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent
+    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent \
+    && mkdir -p /home/agent/.cache /home/agent/.config /home/agent/.local/bin \
+    && chown -R agent:agent /home/agent/.cache /home/agent/.config /home/agent/.local
 
 ARG CLAUDE_CODE_VERSION=2.1.143
 ARG CODEX_VERSION=0.130.0
