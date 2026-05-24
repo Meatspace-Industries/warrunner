@@ -65,5 +65,14 @@ The same values file sets `CENTAUR_DISABLED_INFRA_SECRETS=OPENAI_API_KEY` on
 the API deployment so Warrunner's generated iron-proxy configs do not reference
 or resolve an OpenAI API key at all.
 
+After bootstrapping secrets, deploy the pinned dapp GKE image set with:
+
+```sh
+meatspace/scripts/warrunner-deploy-gke.sh
+```
+
+Use `--render-only` to inspect the exact Helm manifests and verify the no-API-key
+invariants without touching the cluster.
+
 Keep runtime state under `/var/lib/meepo`; do not write mutable state into image
 or release directories.
