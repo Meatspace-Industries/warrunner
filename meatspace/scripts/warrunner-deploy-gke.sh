@@ -130,8 +130,8 @@ require_secret_key() {
 reject_secret_key() {
   local name="$1"
   local key="$2"
-  local jsonpath_key="${key//./\\.}"
-  if kubectl -n "$NAMESPACE" get secret "$name" -o jsonpath="{.data.${jsonpath_key}}" | grep -q .; then
+  if kubectl -n "$NAMESPACE" get secret "$name" -o json \
+    | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin).get("data", {}) else 1)' "$key"; then
     echo "FATAL: Kubernetes Secret $name must not contain forbidden key $key" >&2
     exit 1
   fi
@@ -253,8 +253,8 @@ require_secret warrunner-codex-auth
 require_secret centaur-firewall-ca
 require_secret centaur-firewall-ca-key
 require_secret_key warrunner-codex-auth auth.json
-reject_secret_key centaur-infra-env OPENAI_API_KEY
 require_cmd python3
+reject_secret_key centaur-infra-env OPENAI_API_KEY
 validate_codex_auth_secret warrunner-codex-auth auth.json
 
 helm upgrade --install "${helm_args[@]}"

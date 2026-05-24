@@ -117,8 +117,8 @@ secret_data_value() {
 secret_has_key() {
   local secret_name="$1"
   local key="$2"
-  local jsonpath_key="${key//./\\.}"
-  kubectl -n "$NAMESPACE" get secret "$secret_name" -o jsonpath="{.data.${jsonpath_key}}" 2>/dev/null | grep -q .
+  kubectl -n "$NAMESPACE" get secret "$secret_name" -o json 2>/dev/null \
+    | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin).get("data", {}) else 1)' "$key"
 }
 
 remove_secret_key_if_present() {
