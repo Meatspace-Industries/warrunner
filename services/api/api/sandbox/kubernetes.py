@@ -40,7 +40,14 @@ from api.sandbox.config import (
     runtime_for_session,
 )
 from api.sandbox.prompt_assembly import assemble_prompt
-from api.tool_manager import PgDsnSecret, SecretDef
+from api.tool_manager import (
+    GcpAuthSecret,
+    HmacSignSecret,
+    HttpSecret,
+    OAuthTokenSecret,
+    PgDsnSecret,
+    SecretDef,
+)
 
 log = structlog.get_logger()
 
@@ -143,8 +150,46 @@ def _secret_env_key(name: str) -> str:
     return f"{os.getenv('KUBERNETES_SECRET_ENV_PREFIX', '')}{name}"
 
 
+def _disabled_secret_refs() -> set[str]:
+    return {
+        item.strip()
+        for item in os.getenv("CENTAUR_DISABLED_INFRA_SECRETS", "").split(",")
+        if item.strip()
+    }
+
+
+def _proxy_secret_refs_for_env(secrets: list[SecretDef]) -> list[str]:
+    if os.getenv("FIREWALL_MANAGER_SECRET_SOURCE", "env").strip().lower() != "env":
+        return []
+
+    refs: set[str] = set()
+    for secret in secrets:
+        if isinstance(secret, (HttpSecret, GcpAuthSecret, PgDsnSecret)):
+            refs.add(secret.secret_ref)
+        elif isinstance(secret, OAuthTokenSecret):
+            refs.update(source.secret_ref for _, source in secret.fields)
+            refs.update(source.secret_ref for _, source in secret.token_endpoint_headers)
+        elif isinstance(secret, HmacSignSecret):
+            refs.update(source.secret_ref for _, source in secret.credentials)
+
+    return sorted(ref for ref in refs if ref not in _disabled_secret_refs())
+
+
+def _secret_ref_env(secret_name: str, secret_ref: str) -> dict[str, Any]:
+    return {
+        "name": secret_ref,
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": secret_name,
+                "key": _secret_env_key(secret_ref),
+            }
+        },
+    }
+
+
 def _proxy_iron_env(
     secret_name: str,
+    secrets: list[SecretDef],
     pg_secrets: list[tuple[PgDsnSecret, str]],
 ) -> list[dict[str, Any]]:
     """Env block for the iron-proxy container.
@@ -187,6 +232,8 @@ def _proxy_iron_env(
         env.append(
             {"name": f"PG_PROXY_PASSWORD_{secret.name}", "value": proxy_password}
         )
+    for secret_ref in _proxy_secret_refs_for_env(secrets):
+        env.append(_secret_ref_env(secret_name, secret_ref))
     return env
 
 
@@ -785,6 +832,7 @@ class KubernetesExecutorBackend(SandboxBackend):
     def _build_proxy_pod_spec(
         self,
         sandbox_id: str,
+        secrets: list[SecretDef],
         pg_secrets: list[tuple[PgDsnSecret, str]],
         pg_listen_ports: dict[str, int],
         *,
@@ -793,7 +841,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         """Return the pod.spec dict shared by the sandbox bare Pod and the api-self Deployment."""
         configmap_name = _proxy_configmap_name(sandbox_id)
         secret_name = _secret_env_name()
-        env_from: list[dict[str, Any]] = [{"secretRef": {"name": secret_name}}]
+        env_from: list[dict[str, Any]] = []
         bootstrap_secret_name = _bootstrap_secret_name()
         if (
             os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
@@ -822,7 +870,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                     "name": "iron-proxy",
                     "image": _proxy_image(),
                     "imagePullPolicy": _proxy_image_pull_policy(),
-                    "env": _proxy_iron_env(secret_name, pg_secrets),
+                    "env": _proxy_iron_env(secret_name, secrets, pg_secrets),
                     "envFrom": env_from,
                     "ports": proxy_ports,
                     "readinessProbe": {
@@ -888,12 +936,17 @@ class KubernetesExecutorBackend(SandboxBackend):
     async def _create_proxy_pod(
         self,
         sandbox_id: str,
+        secrets: list[SecretDef],
         pg_secrets: list[tuple[PgDsnSecret, str]],
         pg_listen_ports: dict[str, int],
     ) -> str:
         proxy_pod_name = _new_proxy_pod_name(sandbox_id)
         spec = self._build_proxy_pod_spec(
-            sandbox_id, pg_secrets, pg_listen_ports, restart_policy="Never"
+            sandbox_id,
+            secrets,
+            pg_secrets,
+            pg_listen_ports,
+            restart_policy="Never",
         )
         await self._core_api().create_namespaced_pod(
             _namespace(),
@@ -914,6 +967,7 @@ class KubernetesExecutorBackend(SandboxBackend):
 
     async def _apply_api_proxy_deployment(
         self,
+        secrets: list[SecretDef],
         pg_secrets: list[tuple[PgDsnSecret, str]],
         pg_listen_ports: dict[str, int],
         config_hash: str,
@@ -932,6 +986,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         }
         pod_spec = self._build_proxy_pod_spec(
             _API_PROXY_SANDBOX_ID,
+            secrets,
             pg_secrets,
             pg_listen_ports,
             restart_policy="Always",
@@ -1270,7 +1325,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             await self._create_proxy_service(pod_name, pg_listen_ports)
             await self._create_proxy_network_policies(pod_name, pg_listen_ports)
             proxy_pod_name = await self._create_proxy_pod(
-                pod_name, pg_secrets, pg_listen_ports
+                pod_name, secrets, pg_secrets, pg_listen_ports
             )
             await self._wait_pod_ready(proxy_pod_name)
             await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
@@ -1645,7 +1700,9 @@ class KubernetesExecutorBackend(SandboxBackend):
             rendered,
         )
         await self._create_proxy_service(_API_PROXY_SANDBOX_ID, pg_listen_ports)
-        await self._apply_api_proxy_deployment(pg_secrets, pg_listen_ports, config_hash)
+        await self._apply_api_proxy_deployment(
+            secrets, pg_secrets, pg_listen_ports, config_hash
+        )
         await self._wait_deployment_ready(_proxy_pod_name(_API_PROXY_SANDBOX_ID))
         log.info(
             "api_proxy_deployment_ready",

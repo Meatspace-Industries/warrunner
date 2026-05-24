@@ -16,6 +16,7 @@ from api.sandbox.kubernetes import (
     STDOUT_CHANNEL,
 )
 from api.sandbox.registry import auto_configure
+from api.tool_manager import HttpSecret, PgDsnSecret
 
 
 class FakeCoreApi:
@@ -649,6 +650,19 @@ async def test_create_builds_per_sandbox_proxy_resources(
     monkeypatch.setenv(
         "KUBERNETES_FIREWALL_MANAGER_IMAGE", "centaur-firewall-manager:test"
     )
+    secrets = [
+        HttpSecret(
+            name="ANTHROPIC_API_KEY",
+            secret_ref="ANTHROPIC_API_KEY",
+            hosts=("api.anthropic.com",),
+            match_headers=("X-Api-Key",),
+        ),
+        PgDsnSecret(
+            name="APP_DB",
+            secret_ref="APP_DATABASE_URL",
+            database="app",
+        ),
+    ]
     monkeypatch.setattr(
         "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
     )
@@ -656,6 +670,7 @@ async def test_create_builds_per_sandbox_proxy_resources(
         "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
     )
     monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: secrets)
 
     async def fake_ensure_clients() -> None:
         return None
@@ -697,14 +712,23 @@ async def test_create_builds_per_sandbox_proxy_resources(
     assert [container["name"] for container in proxy_pod["spec"]["containers"]] == [
         "iron-proxy",
     ]
-    assert proxy_pod["spec"]["containers"][0]["image"] == "centaur-iron-proxy:test"
-    assert proxy_pod["spec"]["containers"][0]["readinessProbe"]["periodSeconds"] == 5
+    proxy_container = proxy_pod["spec"]["containers"][0]
+    assert proxy_container["image"] == "centaur-iron-proxy:test"
+    assert proxy_container["readinessProbe"]["periodSeconds"] == 5
     assert (
-        proxy_pod["spec"]["containers"][0]["readinessProbe"]["failureThreshold"] == 30
+        proxy_container["readinessProbe"]["failureThreshold"] == 30
     )
-    assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
-        {"secretRef": {"name": "centaur-infra-env"}}
-    ]
+    assert proxy_container["envFrom"] == []
+    proxy_env = {item["name"]: item for item in proxy_container["env"]}
+    assert "OPENAI_API_KEY" not in proxy_env
+    assert proxy_env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "ANTHROPIC_API_KEY",
+    }
+    assert proxy_env["APP_DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "APP_DATABASE_URL",
+    }
     # ConfigMap with the rendered proxy.yaml is created before the pod.
     assert fake_core.created_configmaps, "proxy ConfigMap not created"
     configmap = fake_core.created_configmaps[0][1]
@@ -747,13 +771,54 @@ async def test_per_sandbox_proxy_uses_bootstrap_secret_for_onepassword(
         return None
 
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
-    await backend._create_proxy_pod("sandbox-pod", [], {})
+    await backend._create_proxy_pod("sandbox-pod", [], [], {})
 
     proxy_pod = fake_core.created_pods[0][1]
     assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
-        {"secretRef": {"name": "centaur-infra-env"}},
         {"secretRef": {"name": "centaur-bootstrap"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_per_sandbox_proxy_skips_disabled_infra_secret_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    backend._core = fake_core
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY")
+    secrets = [
+        HttpSecret(
+            name="OPENAI_API_KEY",
+            secret_ref="OPENAI_API_KEY",
+            hosts=("api.openai.com",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="ANTHROPIC_API_KEY",
+            secret_ref="ANTHROPIC_API_KEY",
+            hosts=("api.anthropic.com",),
+            match_headers=("X-Api-Key",),
+        ),
+    ]
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    await backend._create_proxy_pod("sandbox-pod", secrets, [], {})
+
+    proxy_pod = fake_core.created_pods[0][1]
+    proxy_container = proxy_pod["spec"]["containers"][0]
+    proxy_env = {item["name"]: item for item in proxy_container["env"]}
+    assert proxy_container["envFrom"] == []
+    assert "OPENAI_API_KEY" not in proxy_env
+    assert proxy_env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "ANTHROPIC_API_KEY",
+    }
 
 
 @pytest.mark.asyncio
