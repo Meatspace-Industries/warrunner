@@ -104,6 +104,7 @@ def container_env(
     trace_id: str | None = None,
     resume_thread_id: str | None = None,
     pg_dsns: dict[str, str] | None = None,
+    omit_openai_api_key: bool = False,
 ) -> list[str]:
     """Build env vars for sandbox pods.
 
@@ -137,6 +138,8 @@ def container_env(
     # outbound TLS connection and rewrites these strings in auth headers
     # before they reach the real upstream.
     for key in _HARNESS_STUB_KEYS:
+        if omit_openai_api_key and key == "OPENAI_API_KEY":
+            continue
         env.append(f"{key}={key}")
     for key in _SANDBOX_PASSTHROUGH_ENV_KEYS:
         value = (os.getenv(key) or "").strip()

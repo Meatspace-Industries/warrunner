@@ -50,6 +50,7 @@ _CONTAINER_NAME = "sandbox"
 _AGENT_UID = 1001
 _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
+_CODEX_AUTH_MOUNT_DIR = "/home/agent/codex-auth"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
@@ -248,6 +249,16 @@ def _image_pull_secrets() -> list[dict[str, str]]:
     if not raw:
         return []
     return [{"name": item.strip()} for item in raw.split(",") if item.strip()]
+
+
+def _codex_auth_secret_name() -> str | None:
+    value = (os.getenv("KUBERNETES_CODEX_AUTH_SECRET_NAME") or "").strip()
+    return value or None
+
+
+def _codex_auth_secret_key() -> str:
+    value = (os.getenv("KUBERNETES_CODEX_AUTH_SECRET_KEY") or "auth.json").strip()
+    return value or "auth.json"
 
 
 def _firewall_ca_secret_name() -> str:
@@ -1043,6 +1054,9 @@ class KubernetesExecutorBackend(SandboxBackend):
             for secret, proxy_password in pg_secrets
         }
 
+        codex_auth_secret_name = (
+            _codex_auth_secret_name() if engine == "codex" else None
+        )
         env = container_env(
             thread_key,
             pod_name,
@@ -1050,10 +1064,14 @@ class KubernetesExecutorBackend(SandboxBackend):
             trace_id=trace_id,
             resume_thread_id=resume_thread_id,
             pg_dsns=sandbox_pg_dsns,
+            omit_openai_api_key=bool(codex_auth_secret_name),
         )
         overlay_image = _overlay_image()
         if overlay_image:
             env.append(f"CENTAUR_OVERLAY_DIR={_SANDBOX_OVERLAY_DIR}")
+        if codex_auth_secret_name:
+            env.append(f"CENTAUR_CODEX_AUTH_JSON={_CODEX_AUTH_MOUNT_DIR}/auth.json")
+            env.append("CODEX_HOME=/home/agent/.codex")
         if engine == "claude-code" and model:
             env.append(f"CLAUDE_MODEL={model}")
         if engine == "claude-code" and resume_thread_id:
@@ -1096,6 +1114,29 @@ class KubernetesExecutorBackend(SandboxBackend):
             },
         ]
         init_containers: list[dict[str, Any]] = []
+
+        if codex_auth_secret_name:
+            volume_mounts.append(
+                {
+                    "name": "codex-auth",
+                    "mountPath": _CODEX_AUTH_MOUNT_DIR,
+                    "readOnly": True,
+                }
+            )
+            volumes.append(
+                {
+                    "name": "codex-auth",
+                    "secret": {
+                        "secretName": codex_auth_secret_name,
+                        "items": [
+                            {
+                                "key": _codex_auth_secret_key(),
+                                "path": "auth.json",
+                            }
+                        ],
+                    },
+                }
+            )
 
         if overlay_image:
             volume_mounts.append(

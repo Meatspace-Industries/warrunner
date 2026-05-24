@@ -35,6 +35,9 @@ overlay:
     sourcePath: /overlay
 
 sandbox:
+  codexAuth:
+    existingSecretName: warrunner-codex-auth
+    secretKey: auth.json
   extraEnv:
     WARRUNNER_RUNTIME_STATE_DIR: /var/lib/meepo
 

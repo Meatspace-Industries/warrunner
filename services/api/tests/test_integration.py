@@ -399,6 +399,28 @@ class TestBuildHarnessCmd:
         assert "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1" not in env
         assert "CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1" not in env
 
+    def test_container_env_can_omit_openai_api_key_stub(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from api.sandbox.config import container_env
+
+        monkeypatch.delenv("AGENT_LOCAL_DEV", raising=False)
+        monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+        monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
+
+        env = container_env(
+            "thread-key",
+            "sandbox-id",
+            "firewall.internal",
+            omit_openai_api_key=True,
+        )
+
+        assert "OPENAI_API_KEY=OPENAI_API_KEY" not in env
+        assert "ANTHROPIC_API_KEY=ANTHROPIC_API_KEY" in env
+        assert "AMP_API_KEY=AMP_API_KEY" in env
+        assert "GITHUB_TOKEN=GITHUB_TOKEN" in env
+
 
 class TestResolveHarnessProfile:
     def test_persona_uses_declared_engine_unless_harness_overrides(self, monkeypatch):

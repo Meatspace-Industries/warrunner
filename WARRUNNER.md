@@ -36,5 +36,22 @@ Required secret keys for the Discord deployment:
 - `DISCORDBOT_API_KEY`
 - Centaur's normal API/sandbox/model secrets
 
+## Codex Auth
+
+Warrunner's default Meatspace deployment uses Codex with ChatGPT login auth,
+not OpenAI API billing. Run `codex login` locally first, then create the
+cluster Secret from the resulting `~/.codex/auth.json`:
+
+```sh
+meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh
+```
+
+The Helm values in `meatspace/infra/helm/values.warrunner.yaml` point
+`sandbox.codexAuth.existingSecretName` at `warrunner-codex-auth`. When that
+Secret is configured, the Kubernetes sandbox backend mounts it only into Codex
+sandbox Pods, omits the `OPENAI_API_KEY` harness stub for those Pods, and the
+sandbox entrypoint installs the mounted ChatGPT auth file before
+`codex app-server` starts.
+
 Keep runtime state under `/var/lib/meepo`; do not write mutable state into image
 or release directories.

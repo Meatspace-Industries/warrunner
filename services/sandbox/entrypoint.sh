@@ -77,6 +77,16 @@ else
     exit 1
 fi
 
+CODEX_AUTH_JSON="${CENTAUR_CODEX_AUTH_JSON:-}"
+if [ -n "$CODEX_AUTH_JSON" ]; then
+    if [ ! -r "$CODEX_AUTH_JSON" ]; then
+        echo "configured Codex auth JSON is not readable: $CODEX_AUTH_JSON" >&2
+        exit 1
+    fi
+    cp "$CODEX_AUTH_JSON" "$HOME_DIR/.codex/auth.json"
+    chmod 600 "$HOME_DIR/.codex/auth.json" 2>/dev/null || true
+fi
+
 codex_laminar_trace_endpoint="${CODEX_OTEL_LAMINAR_ENDPOINT:-}"
 if [ -z "$codex_laminar_trace_endpoint" ]; then
     codex_laminar_base="${CODEX_OTEL_LAMINAR_BASE_URL:-${LMNR_BASE_URL:-}}"
@@ -200,7 +210,7 @@ fi
 # Codex reads its auth file when the app server starts. Complete this before
 # signaling readiness, otherwise warm pods can be claimed with no auth loaded.
 CODEX_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
-if [ -n "$CODEX_KEY" ]; then
+if [ -z "$CODEX_AUTH_JSON" ] && [ -n "$CODEX_KEY" ]; then
     echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
 fi
 

@@ -100,6 +100,9 @@ sandbox:
     repository: centaur-agent
     tag: latest
     pullPolicy: Always
+  codexAuth:
+    existingSecretName: ""
+    secretKey: auth.json
   runtimeClassName: ""
   reposPath: ""
   extraEnv: {}

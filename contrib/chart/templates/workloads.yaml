@@ -298,6 +298,12 @@ spec:
               value: {{ include "centaur.secretEnvName" . | quote }}
             - name: KUBERNETES_SECRET_ENV_PREFIX
               value: {{ .Values.secretManager.envPrefix | quote }}
+{{- if .Values.sandbox.codexAuth.existingSecretName }}
+            - name: KUBERNETES_CODEX_AUTH_SECRET_NAME
+              value: {{ .Values.sandbox.codexAuth.existingSecretName | quote }}
+            - name: KUBERNETES_CODEX_AUTH_SECRET_KEY
+              value: {{ .Values.sandbox.codexAuth.secretKey | quote }}
+{{- end }}
 {{- if .Values.secrets.bootstrapSecretName }}
             - name: KUBERNETES_BOOTSTRAP_SECRET_NAME
               value: {{ .Values.secrets.bootstrapSecretName | quote }}
