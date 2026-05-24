@@ -263,6 +263,33 @@ def test_container_env_applies_kubernetes_sandbox_extra_env(
     assert len([item for item in env if item.startswith("no_proxy=")]) == 1
 
 
+def test_container_env_skips_disabled_sandbox_extra_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY")
+    monkeypatch.setenv(
+        "KUBERNETES_SANDBOX_EXTRA_ENV",
+        json.dumps(
+            [
+                {"name": "OPENAI_API_KEY", "value": "sk-should-not-enter-pod"},
+                {"name": "LMNR_BASE_URL", "value": "http://laminar.internal:8000"},
+            ]
+        ),
+    )
+
+    env = sandbox_container_env(
+        "thread-key",
+        "sandbox-id",
+        "firewall.internal",
+        omit_openai_api_key=True,
+    )
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert "OPENAI_API_KEY" not in env_map
+    assert env_map["LMNR_BASE_URL"] == "http://laminar.internal:8000"
+
+
 def test_prompt_bundle_includes_live_capability_inventory_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

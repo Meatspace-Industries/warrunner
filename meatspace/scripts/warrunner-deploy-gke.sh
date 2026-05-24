@@ -192,6 +192,19 @@ verify_rendered_invariants() {
     echo "FATAL: rendered deployment still injects OPENAI_API_KEY" >&2
     exit 1
   fi
+  python3 - "$rendered" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+if re.search(
+    r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n\s*value:\s*.*OPENAI_API_KEY",
+    text,
+):
+    raise SystemExit(
+        "FATAL: rendered sandbox extra env still injects OPENAI_API_KEY"
+    )
+PY
 }
 
 require_cmd helm

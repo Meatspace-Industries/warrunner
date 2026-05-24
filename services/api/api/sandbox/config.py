@@ -71,9 +71,19 @@ def _sandbox_extra_env() -> list[tuple[str, str]]:
         name = str(item.get("name") or "").strip()
         if not name or "=" in name:
             continue
+        if name in _disabled_infra_secret_names():
+            continue
         value = item.get("value")
         extra.append((name, "" if value is None else str(value)))
     return extra
+
+
+def _disabled_infra_secret_names() -> set[str]:
+    return {
+        item.strip()
+        for item in os.getenv("CENTAUR_DISABLED_INFRA_SECRETS", "").split(",")
+        if item.strip()
+    }
 
 
 def amp_mode() -> str:
@@ -137,7 +147,10 @@ def container_env(
     # Placeholder values for harness infra secrets. iron-proxy MITMs the
     # outbound TLS connection and rewrites these strings in auth headers
     # before they reach the real upstream.
+    disabled_infra_secret_names = _disabled_infra_secret_names()
     for key in _HARNESS_STUB_KEYS:
+        if key in disabled_infra_secret_names:
+            continue
         if omit_openai_api_key and key == "OPENAI_API_KEY":
             continue
         env.append(f"{key}={key}")
