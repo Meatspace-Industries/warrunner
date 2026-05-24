@@ -72,6 +72,9 @@ The same values file sets `CENTAUR_DISABLED_INFRA_SECRETS=OPENAI_API_KEY` on
 the API deployment so Warrunner's generated iron-proxy configs do not reference
 or resolve an OpenAI API key at all.
 
+Both the bootstrap script and sandbox entrypoint reject Codex auth JSON that
+contains an `OPENAI_API_KEY` value.
+
 After bootstrapping secrets, deploy the pinned dapp GKE image set with:
 
 ```sh

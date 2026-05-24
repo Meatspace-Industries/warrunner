@@ -83,6 +83,24 @@ if [ -n "$CODEX_AUTH_JSON" ]; then
         echo "configured Codex auth JSON is not readable: $CODEX_AUTH_JSON" >&2
         exit 1
     fi
+    python3 - "$CODEX_AUTH_JSON" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+
+if data.get("auth_mode") != "chatgpt":
+    raise SystemExit("configured Codex auth JSON must have auth_mode=chatgpt")
+
+tokens = data.get("tokens")
+if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
+    raise SystemExit("configured Codex auth JSON is missing tokens.refresh_token")
+
+if data.get("OPENAI_API_KEY"):
+    raise SystemExit("configured Codex auth JSON must not contain OPENAI_API_KEY")
+PYEOF
     cp "$CODEX_AUTH_JSON" "$HOME_DIR/.codex/auth.json"
     chmod 600 "$HOME_DIR/.codex/auth.json" 2>/dev/null || true
 fi

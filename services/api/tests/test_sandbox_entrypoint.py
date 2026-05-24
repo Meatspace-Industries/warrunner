@@ -6,6 +6,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 
 ENTRYPOINT_SH = Path(__file__).resolve().parents[2] / "sandbox" / "entrypoint.sh"
 
@@ -185,6 +187,74 @@ def test_sandbox_entrypoint_installs_mounted_codex_auth_json(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == auth_payload
     assert "codex login should not run" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("auth_payload", "error"),
+    [
+        (
+            {
+                "auth_mode": "api_key",
+                "OPENAI_API_KEY": "sk-test",
+            },
+            "configured Codex auth JSON must have auth_mode=chatgpt",
+        ),
+        (
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {},
+            },
+            "configured Codex auth JSON is missing tokens.refresh_token",
+        ),
+        (
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": "sk-test",
+                "tokens": {"refresh_token": "refresh-token"},
+            },
+            "configured Codex auth JSON must not contain OPENAI_API_KEY",
+        ),
+    ],
+)
+def test_sandbox_entrypoint_rejects_non_chatgpt_codex_auth_json(
+    tmp_path: Path, auth_payload: dict[str, object], error: str
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    auth_src = tmp_path / "codex-auth" / "auth.json"
+    auth_src.parent.mkdir()
+    auth_src.write_text(json.dumps(auth_payload))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\necho 'codex login should not run' >&2\nexit 42\n")
+    codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            "true",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CENTAUR_CODEX_AUTH_JSON": str(auth_src),
+            "OPENAI_API_KEY": "OPENAI_API_KEY",
+        },
+    )
+
+    assert result.returncode == 1
+    assert error in result.stderr
+    assert "codex login should not run" not in result.stderr
+    assert not (home / ".codex" / "auth.json").exists()
 
 
 def test_sandbox_entrypoint_appends_codex_laminar_otel_config(tmp_path: Path) -> None:

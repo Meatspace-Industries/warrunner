@@ -179,6 +179,9 @@ if data.get("auth_mode") != "chatgpt":
 tokens = data.get("tokens")
 if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
     raise SystemExit("FATAL: Codex auth JSON is missing tokens.refresh_token")
+
+if data.get("OPENAI_API_KEY"):
+    raise SystemExit("FATAL: Codex auth JSON must not contain OPENAI_API_KEY")
 PY
 }
 
