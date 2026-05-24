@@ -509,6 +509,21 @@ def test_discover_loads_fake_tools_with_shadowing_personas_and_failures(tmp_path
     assert "code-reviewer" not in manager.tools
 
 
+def test_collect_secrets_can_disable_openai_infra_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY")
+
+    manager = ToolManager(tmp_path / "tools")
+    secrets = manager.collect_secrets()
+    secret_names = {secret.name for secret in secrets}
+
+    assert "OPENAI_API_KEY" not in secret_names
+    assert "ANTHROPIC_API_KEY" in secret_names
+    assert "AMP_API_KEY" in secret_names
+
+
 @pytest.mark.asyncio
 async def test_call_tool_invokes_sync_and_async_methods_with_secret_placeholders(
     tmp_path: Path,

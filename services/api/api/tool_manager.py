@@ -1642,7 +1642,16 @@ class ToolManager:
         Every ``HttpSecret``, ``GcpAuthSecret`` and ``OAuthTokenSecret`` carries
         its own ``hosts``; ``PgDsnSecret`` is a TCP listener with no host.
         """
-        out: list[SecretDef] = list(self._INFRA_SECRETS)
+        disabled_infra_secrets = {
+            item.strip()
+            for item in os.getenv("CENTAUR_DISABLED_INFRA_SECRETS", "").split(",")
+            if item.strip()
+        }
+        out: list[SecretDef] = [
+            secret
+            for secret in self._INFRA_SECRETS
+            if secret.name not in disabled_infra_secrets
+        ]
         for lt in self.tools.values():
             out.extend(lt.all_secrets)
         return out

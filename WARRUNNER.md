@@ -61,5 +61,9 @@ sandbox Pods, omits the `OPENAI_API_KEY` harness stub for those Pods, and the
 sandbox entrypoint installs the mounted ChatGPT auth file before
 `codex app-server` starts.
 
+The same values file sets `CENTAUR_DISABLED_INFRA_SECRETS=OPENAI_API_KEY` on
+the API deployment so Warrunner's generated iron-proxy configs do not reference
+or resolve an OpenAI API key at all.
+
 Keep runtime state under `/var/lib/meepo`; do not write mutable state into image
 or release directories.

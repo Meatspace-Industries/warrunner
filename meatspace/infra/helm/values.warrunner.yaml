@@ -6,6 +6,7 @@ api:
   slackEtlEnabled: false
   extraEnv:
     CENTAUR_DEPLOYMENT_NAME: warrunner
+    CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY
 
 slackbot:
   enabled: false
