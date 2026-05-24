@@ -567,6 +567,70 @@ async def test_create_builds_pod_and_prompt_secret(
 
 
 @pytest.mark.asyncio
+async def test_create_codex_pod_mounts_chatgpt_auth_without_openai_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db/centaur")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_NAME", "warrunner-codex-auth")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_KEY", "auth-state.json")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["codex-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: [])
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    await backend.create(
+        "discord:1435290709363130390:1508220472569888950:thread",
+        "codex",
+        "codex",
+    )
+
+    sandbox_pod = fake_core.created_pods[1][1]
+    container = sandbox_pod["spec"]["containers"][0]
+    env = {item["name"]: item["value"] for item in container["env"]}
+    volume_mounts = {item["name"]: item for item in container["volumeMounts"]}
+    volumes = {item["name"]: item for item in sandbox_pod["spec"]["volumes"]}
+
+    assert "OPENAI_API_KEY" not in env
+    assert env["CENTAUR_CODEX_AUTH_JSON"] == "/home/agent/codex-auth/auth.json"
+    assert env["CODEX_HOME"] == "/home/agent/.codex"
+    assert volume_mounts["codex-auth"] == {
+        "name": "codex-auth",
+        "mountPath": "/home/agent/codex-auth",
+        "readOnly": True,
+    }
+    assert volumes["codex-auth"] == {
+        "name": "codex-auth",
+        "secret": {
+            "secretName": "warrunner-codex-auth",
+            "items": [{"key": "auth-state.json", "path": "auth.json"}],
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_builds_per_sandbox_proxy_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -46,6 +46,14 @@ cluster Secret from the resulting `~/.codex/auth.json`:
 meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh
 ```
 
+Re-run the same script after changing `~/.config/warrunner/deploy.env` or after
+refreshing local Codex login. To refresh only the Codex auth Secret without
+touching Discord or database secrets:
+
+```sh
+meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh --codex-auth-only
+```
+
 The Helm values in `meatspace/infra/helm/values.warrunner.yaml` point
 `sandbox.codexAuth.existingSecretName` at `warrunner-codex-auth`. When that
 Secret is configured, the Kubernetes sandbox backend mounts it only into Codex
