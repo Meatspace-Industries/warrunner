@@ -127,6 +127,44 @@ require_secret_key() {
   fi
 }
 
+reject_secret_key() {
+  local name="$1"
+  local key="$2"
+  local jsonpath_key="${key//./\\.}"
+  if kubectl -n "$NAMESPACE" get secret "$name" -o jsonpath="{.data.${jsonpath_key}}" | grep -q .; then
+    echo "FATAL: Kubernetes Secret $name must not contain forbidden key $key" >&2
+    exit 1
+  fi
+}
+
+validate_codex_auth_secret() {
+  local name="$1"
+  local key="$2"
+  kubectl -n "$NAMESPACE" get secret "$name" -o json \
+    | python3 -c '
+import base64
+import json
+import sys
+
+key = sys.argv[1]
+secret = json.load(sys.stdin)
+encoded = secret.get("data", {}).get(key)
+if not encoded:
+    raise SystemExit(f"FATAL: Kubernetes Secret is missing key {key}")
+
+data = json.loads(base64.b64decode(encoded).decode())
+if data.get("auth_mode") != "chatgpt":
+    raise SystemExit("FATAL: Codex auth Secret must have auth_mode=chatgpt")
+
+tokens = data.get("tokens")
+if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
+    raise SystemExit("FATAL: Codex auth Secret is missing tokens.refresh_token")
+
+if data.get("OPENAI_API_KEY"):
+    raise SystemExit("FATAL: Codex auth Secret must not contain OPENAI_API_KEY")
+' "$key"
+}
+
 image_exists() {
   local image="$1"
   gcloud artifacts docker tags list "$image" \
@@ -215,5 +253,8 @@ require_secret warrunner-codex-auth
 require_secret centaur-firewall-ca
 require_secret centaur-firewall-ca-key
 require_secret_key warrunner-codex-auth auth.json
+reject_secret_key centaur-infra-env OPENAI_API_KEY
+require_cmd python3
+validate_codex_auth_secret warrunner-codex-auth auth.json
 
 helm upgrade --install "${helm_args[@]}"

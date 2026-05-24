@@ -114,6 +114,24 @@ secret_data_value() {
     | python3 -c 'import base64,json,sys; value=json.load(sys.stdin).get("data",{}).get(sys.argv[1],""); sys.stdout.write(base64.b64decode(value).decode() if value else "")' "$key"
 }
 
+secret_has_key() {
+  local secret_name="$1"
+  local key="$2"
+  local jsonpath_key="${key//./\\.}"
+  kubectl -n "$NAMESPACE" get secret "$secret_name" -o jsonpath="{.data.${jsonpath_key}}" 2>/dev/null | grep -q .
+}
+
+remove_secret_key_if_present() {
+  local secret_name="$1"
+  local key="$2"
+  if secret_has_key "$secret_name" "$key"; then
+    kubectl -n "$NAMESPACE" patch secret "$secret_name" \
+      --type=json \
+      -p="[{\"op\":\"remove\",\"path\":\"/data/${key}\"}]" >/dev/null
+    echo "Removed forbidden key $key from Secret $secret_name in namespace $NAMESPACE"
+  fi
+}
+
 existing_secret_value() {
   local key="$1"
   if secret_exists "$INFRA_SECRET_NAME"; then
@@ -212,6 +230,10 @@ if [[ "$CODEX_AUTH_ONLY" != "1" ]]; then
 
   require_env_value DISCORD_BOT_TOKEN
   require_env_value DISCORD_GUILD_ID
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    echo "FATAL: OPENAI_API_KEY must not be set for Warrunner; use Codex ChatGPT login auth instead" >&2
+    exit 1
+  fi
   if [[ -z "${WARRUNNER_HOME_FORUM_CHANNEL_ID:-}" && -z "${WARRUNNER_HOME_CHANNEL_IDS:-}" ]]; then
     echo "FATAL: WARRUNNER_HOME_FORUM_CHANNEL_ID or WARRUNNER_HOME_CHANNEL_IDS is required in $ENV_FILE" >&2
     exit 1
@@ -279,6 +301,7 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
   secret_args+=(--from-literal=GITHUB_TOKEN="$GITHUB_TOKEN")
 fi
 kubectl "${secret_args[@]}" | apply_kubectl_yaml
+remove_secret_key_if_present "$INFRA_SECRET_NAME" OPENAI_API_KEY
 echo "Applied Secret $INFRA_SECRET_NAME in namespace $NAMESPACE"
 
 if secret_exists centaur-firewall-ca && secret_exists centaur-firewall-ca-key; then

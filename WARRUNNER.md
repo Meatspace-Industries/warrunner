@@ -75,6 +75,11 @@ or resolve an OpenAI API key at all.
 Both the bootstrap script and sandbox entrypoint reject Codex auth JSON that
 contains an `OPENAI_API_KEY` value.
 
+The bootstrap and deploy scripts also reject `OPENAI_API_KEY` in the shared
+`centaur-infra-env` Kubernetes Secret. That matters because the chart imports
+that Secret with `envFrom`, so stale manually-created keys would otherwise
+enter the API container environment.
+
 After bootstrapping secrets, deploy the pinned dapp GKE image set with:
 
 ```sh
