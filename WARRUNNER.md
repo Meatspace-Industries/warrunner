@@ -54,6 +54,13 @@ touching Discord or database secrets:
 meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh --codex-auth-only
 ```
 
+Before creating any Kubernetes Secrets, use `--check-only` to validate the
+local deploy env and Codex ChatGPT login file without uploading auth material:
+
+```sh
+meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh --check-only
+```
+
 The Helm values in `meatspace/infra/helm/values.warrunner.yaml` point
 `sandbox.codexAuth.existingSecretName` at `warrunner-codex-auth`. When that
 Secret is configured, the Kubernetes sandbox backend mounts it only into Codex

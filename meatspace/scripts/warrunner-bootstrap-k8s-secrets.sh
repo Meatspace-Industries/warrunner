@@ -9,6 +9,7 @@ INFRA_SECRET_NAME="centaur-infra-env"
 CODEX_AUTH_SECRET_NAME="warrunner-codex-auth"
 FORCE=0
 CODEX_AUTH_ONLY=0
+CHECK_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -24,6 +25,7 @@ Options:
   --env-file <path>         Deploy env file. Default: ~/.config/warrunner/deploy.env
   --codex-auth-file <path>  Codex auth JSON. Default: ~/.codex/auth.json
   --codex-auth-only         Only validate and apply the Codex auth Secret
+  --check-only              Validate local inputs without changing Kubernetes
   --force                   Recreate managed Secrets
   -h, --help                Show this help
 EOF
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --codex-auth-only)
       CODEX_AUTH_ONLY=1
+      shift
+      ;;
+    --check-only)
+      CHECK_ONLY=1
       shift
       ;;
     --force)
@@ -176,8 +182,10 @@ if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
 PY
 }
 
-require_cmd kubectl
 require_cmd python3
+if [[ "$CHECK_ONLY" != "1" ]]; then
+  require_cmd kubectl
+fi
 
 if [[ ! -r "$CODEX_AUTH_FILE" ]]; then
   echo "FATAL: Codex auth JSON is not readable: $CODEX_AUTH_FILE" >&2
@@ -186,7 +194,9 @@ if [[ ! -r "$CODEX_AUTH_FILE" ]]; then
 fi
 
 if [[ "$CODEX_AUTH_ONLY" != "1" ]]; then
-  require_cmd openssl
+  if [[ "$CHECK_ONLY" != "1" ]]; then
+    require_cmd openssl
+  fi
   if [[ ! -r "$ENV_FILE" ]]; then
     echo "FATAL: deploy env file is not readable: $ENV_FILE" >&2
     exit 1
@@ -206,6 +216,11 @@ if [[ "$CODEX_AUTH_ONLY" != "1" ]]; then
 fi
 
 validate_codex_auth
+
+if [[ "$CHECK_ONLY" == "1" ]]; then
+  echo "Local Warrunner secret inputs are valid; no Kubernetes Secrets were changed."
+  exit 0
+fi
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
