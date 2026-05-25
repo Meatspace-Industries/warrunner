@@ -222,6 +222,13 @@ HOME_FORUM_CHANNEL_ID="${HOME_FORUM_CHANNEL_ID:-$DEFAULT_HOME_FORUM_CHANNEL_ID}"
 ALLOWED_ROLE_IDS="${WARRUNNER_ALLOWED_ROLE_IDS:-$(env_value WARRUNNER_ALLOWED_ROLE_IDS)}"
 ALLOWED_ROLE_IDS="${ALLOWED_ROLE_IDS:-$DEFAULT_ALLOWED_ROLE_IDS}"
 HELM_ALLOWED_ROLE_IDS="${ALLOWED_ROLE_IDS//,/\\,}"
+DNS_IP_BLOCKS="${WARRUNNER_DNS_IP_BLOCKS:-$(env_value WARRUNNER_DNS_IP_BLOCKS)}"
+if [[ -z "$DNS_IP_BLOCKS" && "$RENDER_ONLY" != "1" ]]; then
+  DNS_SERVICE_IP="$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  if [[ -n "$DNS_SERVICE_IP" && "$DNS_SERVICE_IP" != "None" ]]; then
+    DNS_IP_BLOCKS="${DNS_SERVICE_IP}/32"
+  fi
+fi
 
 REGISTRY="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}"
 helm_args=(
@@ -245,6 +252,17 @@ helm_args=(
   --set-string "discordbot.homeForumChannelId=$HOME_FORUM_CHANNEL_ID"
   --set-string "discordbot.allowedRoleIds=$HELM_ALLOWED_ROLE_IDS"
 )
+
+if [[ -n "$DNS_IP_BLOCKS" ]]; then
+  IFS=',' read -r -a dns_ip_blocks <<< "$DNS_IP_BLOCKS"
+  for i in "${!dns_ip_blocks[@]}"; do
+    cidr="${dns_ip_blocks[$i]}"
+    cidr="${cidr//[[:space:]]/}"
+    if [[ -n "$cidr" ]]; then
+      helm_args+=(--set-string "networkPolicy.dnsIpBlocks[$i]=$cidr")
+    fi
+  done
+fi
 
 if [[ "$SKIP_IMAGE_CHECK" != "1" ]]; then
   require_image_tag centaur-api

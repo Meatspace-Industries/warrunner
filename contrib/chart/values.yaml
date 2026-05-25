@@ -285,6 +285,7 @@ runnerAccess:
 
 networkPolicy:
   enabled: true
+  dnsIpBlocks: []
   ingressSourceNamespaces: []
   apiIngressSourceNamespaces: []
   ingressControllerNamespaces:

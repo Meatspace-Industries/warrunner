@@ -751,10 +751,12 @@ async def test_create_builds_per_sandbox_proxy_resources(
     assert proxy_env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"] == {
         "name": "centaur-infra-env",
         "key": "ANTHROPIC_API_KEY",
+        "optional": True,
     }
     assert proxy_env["APP_DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
         "name": "centaur-infra-env",
         "key": "APP_DATABASE_URL",
+        "optional": True,
     }
     # ConfigMap with the rendered proxy.yaml is created before the pod.
     assert fake_core.created_configmaps, "proxy ConfigMap not created"
@@ -845,6 +847,7 @@ async def test_per_sandbox_proxy_skips_disabled_infra_secret_refs(
     assert proxy_env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"] == {
         "name": "centaur-infra-env",
         "key": "ANTHROPIC_API_KEY",
+        "optional": True,
     }
 
 

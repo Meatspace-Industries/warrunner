@@ -182,6 +182,10 @@ def _secret_ref_env(secret_name: str, secret_ref: str) -> dict[str, Any]:
             "secretKeyRef": {
                 "name": secret_name,
                 "key": _secret_env_key(secret_ref),
+                # Individual tool credentials should not block the shared
+                # proxy pod from starting. Tools that need a missing secret
+                # will fail at call time; the control plane should still boot.
+                "optional": True,
             }
         },
     }
