@@ -78,7 +78,7 @@ export class DiscordClient {
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = discordBotToken(this.config)
     if (!token) throw new Error('DISCORD_BOT_TOKEN is not configured')
-    const response = await fetch(new URL(path, this.config.DISCORD_API_URL), {
+    const response = await fetch(discordApiUrl(this.config.DISCORD_API_URL, path), {
       ...init,
       headers: {
         Authorization: `Bot ${token}`,
@@ -94,6 +94,12 @@ export class DiscordClient {
     }
     return body as T
   }
+}
+
+function discordApiUrl(baseUrl: string, path: string): URL {
+  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+  const relative = path.replace(/^\/+/, '')
+  return new URL(relative, base)
 }
 
 export class DiscordChannelResolver {
