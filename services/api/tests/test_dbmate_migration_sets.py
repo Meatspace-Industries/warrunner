@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
+
+import pytest
 
 
 def test_get_migration_sets_includes_overlay(tmp_path, monkeypatch) -> None:
@@ -68,3 +71,48 @@ def test_run_migrations_applies_each_migration_set(tmp_path, monkeypatch) -> Non
         "--no-dump-schema",
         "up",
     ]
+
+
+def test_run_migrations_uses_configured_timeout(tmp_path, monkeypatch) -> None:
+    import api.db as db
+
+    base_dir = tmp_path / "base" / "db" / "migrations"
+    base_dir.mkdir(parents=True)
+    monkeypatch.setattr(db, "BASE_MIGRATIONS_DIR", base_dir)
+    monkeypatch.setenv("DB_MIGRATION_TIMEOUT_SECONDS", "180")
+
+    timeouts: list[object] = []
+
+    def fake_run(_command: list[str], **kwargs: object) -> SimpleNamespace:
+        timeouts.append(kwargs.get("timeout"))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(db.subprocess, "run", fake_run)
+
+    db.run_migrations("postgresql://tempo:tempo_dev@postgres:5432/centaur")
+
+    assert timeouts == [180.0]
+
+
+def test_run_migrations_timeout_does_not_expose_database_url(
+    tmp_path, monkeypatch
+) -> None:
+    import api.db as db
+
+    base_dir = tmp_path / "base" / "db" / "migrations"
+    base_dir.mkdir(parents=True)
+    monkeypatch.setattr(db, "BASE_MIGRATIONS_DIR", base_dir)
+    monkeypatch.setenv("DB_MIGRATION_TIMEOUT_SECONDS", "1")
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(db.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc:
+        db.run_migrations("postgresql://tempo:super_secret@postgres:5432/centaur")
+
+    message = str(exc.value)
+    assert "core" in message
+    assert "super_secret" not in message
+    assert "postgresql://" not in message

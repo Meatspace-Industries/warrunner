@@ -173,6 +173,7 @@ postgres:
   args:
     - "-c"
     - "shared_preload_libraries=pg_search,pg_cron"
+  dataDir: /var/lib/postgresql/data/pgdata
   auth:
     database: ai_v2
     username: tempo

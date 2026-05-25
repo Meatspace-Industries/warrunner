@@ -15,6 +15,7 @@ BASE_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "db" / "migration
 BASE_MIGRATIONS_TABLE = "schema_migrations"
 OVERLAY_MIGRATIONS_TABLE = "schema_migrations_overlay"
 OVERLAY_MIGRATIONS_RELATIVE_DIR = Path("services") / "api" / "db" / "migrations"
+DEFAULT_MIGRATION_TIMEOUT_SECONDS = 300
 
 REQUIRED_SANDBOX_SESSION_STATES = frozenset(
     {
@@ -96,6 +97,21 @@ def _dbmate_url(database_url: str) -> str:
     return f"{database_url}{sep}sslmode=disable"
 
 
+def _migration_timeout_seconds() -> float:
+    value = (os.getenv("DB_MIGRATION_TIMEOUT_SECONDS") or "").strip()
+    if not value:
+        return DEFAULT_MIGRATION_TIMEOUT_SECONDS
+    try:
+        timeout = float(value)
+    except ValueError:
+        log.warning("invalid_migration_timeout", value=value)
+        return DEFAULT_MIGRATION_TIMEOUT_SECONDS
+    if timeout <= 0:
+        log.warning("invalid_migration_timeout", value=value)
+        return DEFAULT_MIGRATION_TIMEOUT_SECONDS
+    return timeout
+
+
 async def create_pool(database_url: str) -> asyncpg.Pool:
     run_migrations(database_url)
     pool = await asyncpg.create_pool(
@@ -116,6 +132,7 @@ def run_migrations(database_url: str) -> None:
     """Run pending dbmate migrations. Idempotent — safe to call on every startup."""
     dbmate_url = _dbmate_url(database_url)
     migration_sets = get_migration_sets()
+    timeout_s = _migration_timeout_seconds()
 
     try:
         applied_any = False
@@ -143,7 +160,7 @@ def run_migrations(database_url: str) -> None:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=timeout_s,
             )
             if result.returncode != 0:
                 log.error(
@@ -172,6 +189,28 @@ def run_migrations(database_url: str) -> None:
         log.warning(
             "dbmate_not_found", msg="dbmate binary not in PATH, skipping migrations"
         )
+    except subprocess.TimeoutExpired as exc:
+        set_name = "unknown"
+        migrations_table = "unknown"
+        command = getattr(exc, "cmd", None)
+        if isinstance(command, list):
+            if "--migrations-table" in command:
+                index = command.index("--migrations-table")
+                if index + 1 < len(command):
+                    migrations_table = command[index + 1]
+            for migration_set in migration_sets:
+                if migration_set.migrations_table == migrations_table:
+                    set_name = migration_set.name
+                    break
+        log.error(
+            "dbmate_timeout",
+            set_name=set_name,
+            migrations_table=migrations_table,
+            timeout_s=timeout_s,
+        )
+        raise RuntimeError(
+            f"dbmate migration timed out for {set_name} after {timeout_s:g}s"
+        ) from None
 
 
 async def check_schema_compatibility(pool: asyncpg.Pool) -> dict[str, object]:

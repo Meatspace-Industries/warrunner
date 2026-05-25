@@ -3,6 +3,7 @@ set -euo pipefail
 
 NAMESPACE="centaur-system"
 RELEASE_NAME="warrunner"
+EGRESS_NAMESPACE="${WARRUNNER_EGRESS_NAMESPACE:-centaur-egress}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-dapp-455423}"
 LOCATION="us-west1"
 REPOSITORY="warrunner"
@@ -26,6 +27,7 @@ Secrets created by warrunner-bootstrap-k8s-secrets.sh.
 Options:
   --namespace <name>        Kubernetes namespace. Default: centaur-system
   --release-name <name>     Helm release name. Default: warrunner
+  WARRUNNER_EGRESS_NAMESPACE may override the egress namespace. Default: centaur-egress
   --project <id>            Google Cloud project. Default: dapp-455423
   --location <name>         Artifact Registry location. Default: us-west1
   --repository <name>       Artifact Registry repository. Default: warrunner
@@ -228,6 +230,7 @@ helm_args=(
   -f meatspace/infra/helm/values.warrunner.yaml
   --set secretManager.existingSecretName=centaur-infra-env
   --set ironProxy.secretSource=env
+  --set api.egressDiscovery.namespace="$EGRESS_NAMESPACE"
   --set api.image.repository="$REGISTRY/centaur-api"
   --set api.image.tag="$IMAGE_TAG"
   --set sandbox.image.repository="$REGISTRY/centaur-agent"
@@ -269,5 +272,7 @@ require_secret_key warrunner-codex-auth auth.json
 require_cmd python3
 reject_secret_key centaur-infra-env OPENAI_API_KEY
 validate_codex_auth_secret warrunner-codex-auth auth.json
+
+kubectl create namespace "$EGRESS_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 helm upgrade --install "${helm_args[@]}"

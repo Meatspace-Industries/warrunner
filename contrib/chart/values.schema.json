@@ -160,6 +160,12 @@
         "resources": { "type": "object" }
       }
     },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "dataDir": { "type": "string" }
+      }
+    },
     "runnerAccess": {
       "type": "object",
       "properties": {
