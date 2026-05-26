@@ -7,7 +7,7 @@ EGRESS_NAMESPACE="${WARRUNNER_EGRESS_NAMESPACE:-centaur-egress}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-dapp-455423}"
 LOCATION="us-west1"
 REPOSITORY="warrunner"
-IMAGE_TAG="${WARRUNNER_IMAGE_TAG:-d99cc795}"
+IMAGE_TAG="${WARRUNNER_IMAGE_TAG:-263a6e84}"
 ENV_FILE="${WARRUNNER_DEPLOY_ENV_FILE:-$HOME/.config/warrunner/deploy.env}"
 RENDER_ONLY=0
 SKIP_IMAGE_CHECK=0
@@ -32,7 +32,7 @@ Options:
   --project <id>            Google Cloud project. Default: dapp-455423
   --location <name>         Artifact Registry location. Default: us-west1
   --repository <name>       Artifact Registry repository. Default: warrunner
-  --image-tag <tag>         Image tag. Default: d99cc795
+  --image-tag <tag>         Image tag. Default: 263a6e84
   --env-file <path>         Deploy env file. Default: ~/.config/warrunner/deploy.env
   --render-only             Render Helm manifests and verify invariants; do not deploy
   --skip-image-check        Do not verify image tags in Artifact Registry

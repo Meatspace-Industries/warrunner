@@ -12,7 +12,7 @@ is present.
 - Namespace: `centaur-system`
 - Deploy env: `~/.config/warrunner/deploy.env`
 - Codex auth: `~/.codex/auth.json` from a local `codex login`
-- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:d99cc795`
+- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:263a6e84`
 
 Create the deploy env from the template:
 
