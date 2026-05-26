@@ -36,6 +36,7 @@ from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
     build_harness_cmd,
     container_env,
+    harness_resume_env,
     image,
     runtime_for_session,
 )
@@ -1121,10 +1122,10 @@ class KubernetesExecutorBackend(SandboxBackend):
             pod_name,
             firewall_host,
             trace_id=trace_id,
-            resume_thread_id=resume_thread_id,
             pg_dsns=sandbox_pg_dsns,
             omit_openai_api_key=bool(codex_auth_secret_name),
         )
+        env.extend(harness_resume_env(engine, resume_thread_id))
         overlay_image = _overlay_image()
         if overlay_image:
             env.append(f"CENTAUR_OVERLAY_DIR={_SANDBOX_OVERLAY_DIR}")
@@ -1133,8 +1134,6 @@ class KubernetesExecutorBackend(SandboxBackend):
             env.append("CODEX_HOME=/home/agent/.codex")
         if engine == "claude-code" and model:
             env.append(f"CLAUDE_MODEL={model}")
-        if engine == "claude-code" and resume_thread_id:
-            env.append(f"CLAUDE_CONTINUE_SESSION_ID={resume_thread_id}")
         if persona:
             env.append(f"AGENT_PERSONA={persona}")
         if repo:

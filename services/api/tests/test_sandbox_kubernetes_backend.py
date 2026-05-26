@@ -541,6 +541,7 @@ async def test_create_builds_pod_and_prompt_secret(
     assert env["CENTAUR_API_KEY"] == "sandbox-token"
     assert env["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
     assert env["AMP_API_KEY"] == "AMP_API_KEY"
+    assert env["AMP_CONTINUE_THREAD_ID"] == "T-123"
     assert env["CENTAUR_OVERLAY_DIR"] == "/home/agent/overlay/org"
     assert env["AGENT_PERSONA"] == "eng"
     assert env["AGENT_REPO"] == "paradigmxyz/centaur"
@@ -633,6 +634,7 @@ async def test_create_codex_pod_mounts_chatgpt_auth_without_openai_api_key(
         "discord:1435290709363130390:1508220472569888950:thread",
         "codex",
         "codex",
+        resume_thread_id="stale-amp-thread",
     )
 
     sandbox_pod = fake_core.created_pods[1][1]
@@ -642,6 +644,8 @@ async def test_create_codex_pod_mounts_chatgpt_auth_without_openai_api_key(
     volumes = {item["name"]: item for item in sandbox_pod["spec"]["volumes"]}
 
     assert "OPENAI_API_KEY" not in env
+    assert "AMP_CONTINUE_THREAD_ID" not in env
+    assert "CODEX_CONTINUE_THREAD_ID" not in env
     assert env["CENTAUR_CODEX_AUTH_JSON"] == "/home/agent/codex-auth/auth.json"
     assert env["CODEX_HOME"] == "/home/agent/.codex"
     assert volume_mounts["codex-auth"] == {

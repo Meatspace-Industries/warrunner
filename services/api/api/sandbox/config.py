@@ -112,7 +112,6 @@ def container_env(
     firewall_host: str,
     *,
     trace_id: str | None = None,
-    resume_thread_id: str | None = None,
     pg_dsns: dict[str, str] | None = None,
     omit_openai_api_key: bool = False,
 ) -> list[str]:
@@ -136,8 +135,6 @@ def container_env(
     visibility = amp_thread_visibility()
     if visibility:
         env.append(f"AMP_THREAD_VISIBILITY={visibility}")
-    if resume_thread_id:
-        env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
 
     no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
     api_host = urlsplit(api_url).hostname
@@ -184,6 +181,23 @@ def container_env(
         _set_env(env, name, value)
 
     return env
+
+
+def harness_resume_env(engine: str, resume_thread_id: str | None) -> list[str]:
+    """Return harness-specific cold-start resume env vars.
+
+    Resume identifiers are not portable across harnesses. Codex app-server
+    resume is intentionally omitted here because cold sandboxes do not have
+    durable Codex thread state to resume from yet.
+    """
+    resume = (resume_thread_id or "").strip()
+    if not resume:
+        return []
+    if engine == "amp":
+        return [f"AMP_CONTINUE_THREAD_ID={resume}"]
+    if engine == "claude-code":
+        return [f"CLAUDE_CONTINUE_SESSION_ID={resume}"]
+    return []
 
 
 def runtime_for_session(session: SandboxSession):

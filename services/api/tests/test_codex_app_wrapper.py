@@ -138,6 +138,49 @@ def test_request_attaches_traceparent(monkeypatch) -> None:
     ]
 
 
+def test_start_or_resume_thread_ignores_amp_resume_env(monkeypatch) -> None:
+    wrapper = _load_wrapper()
+    calls: list[tuple[str, dict]] = []
+    emitted: list[dict] = []
+
+    def fake_request(method: str, params: dict, timeout: float = 30.0) -> dict:
+        calls.append((method, params))
+        return {"thread": {"id": "thread-123"}}
+
+    monkeypatch.setattr(wrapper, "request", fake_request)
+    monkeypatch.setattr(wrapper, "emit", lambda msg: emitted.append(msg))
+    monkeypatch.setenv("AMP_CONTINUE_THREAD_ID", "amp-thread-123")
+    monkeypatch.delenv("CODEX_CONTINUE_THREAD_ID", raising=False)
+    wrapper.THREAD_ID = None
+
+    assert wrapper.start_or_resume_thread() == "thread-123"
+    assert calls == [("thread/start", {"cwd": wrapper.os.getcwd()})]
+    assert {"type": "thread.started", "thread_id": "thread-123"} in emitted
+
+
+def test_start_or_resume_thread_uses_codex_resume_env(monkeypatch) -> None:
+    wrapper = _load_wrapper()
+    calls: list[tuple[str, dict]] = []
+
+    def fake_request(method: str, params: dict, timeout: float = 30.0) -> dict:
+        calls.append((method, params))
+        return {"thread": {"id": "codex-thread-123"}}
+
+    monkeypatch.setattr(wrapper, "request", fake_request)
+    monkeypatch.setattr(wrapper, "emit", lambda _msg: None)
+    monkeypatch.setenv("AMP_CONTINUE_THREAD_ID", "amp-thread-123")
+    monkeypatch.setenv("CODEX_CONTINUE_THREAD_ID", "codex-thread-123")
+    wrapper.THREAD_ID = None
+
+    assert wrapper.start_or_resume_thread() == "codex-thread-123"
+    assert calls == [
+        (
+            "thread/resume",
+            {"threadId": "codex-thread-123", "cwd": wrapper.os.getcwd()},
+        )
+    ]
+
+
 def test_main_lazy_starts_app_server_after_input(monkeypatch) -> None:
     wrapper = _load_wrapper()
     requests: list[tuple[str, dict]] = []
