@@ -288,6 +288,70 @@ spec:
             - name: SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS
               value: {{ .Values.api.slackEtlExcludedChannelPatterns | quote }}
 {{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_ENABLED") }}
+            - name: DISCORD_ETL_ENABLED
+              value: {{ ternary "1" "0" .Values.api.discordEtlEnabled | quote }}
+{{- end }}
+{{- if and .Values.api.discordGuildId (not (hasKey $apiExtraEnv "DISCORD_GUILD_ID")) }}
+            - name: DISCORD_GUILD_ID
+              value: {{ .Values.api.discordGuildId | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_SYNC_INTERVAL_SECONDS") }}
+            - name: DISCORD_SYNC_INTERVAL_SECONDS
+              value: {{ .Values.api.discordSyncIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_BACKFILL_INTERVAL_SECONDS") }}
+            - name: DISCORD_BACKFILL_INTERVAL_SECONDS
+              value: {{ .Values.api.discordBackfillIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_BACKFILL_CHANNEL_BATCH_LIMIT") }}
+            - name: DISCORD_BACKFILL_CHANNEL_BATCH_LIMIT
+              value: {{ .Values.api.discordBackfillChannelBatchLimit | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_BACKFILL_PAGES_PER_JOB") }}
+            - name: DISCORD_BACKFILL_PAGES_PER_JOB
+              value: {{ .Values.api.discordBackfillPagesPerJob | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_SYNC_RECENT_LIMIT") }}
+            - name: DISCORD_SYNC_RECENT_LIMIT
+              value: {{ .Values.api.discordSyncRecentLimit | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_SYNC_PAGES_PER_CHANNEL") }}
+            - name: DISCORD_SYNC_PAGES_PER_CHANNEL
+              value: {{ .Values.api.discordSyncPagesPerChannel | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_CONTEXT_DOCUMENTS_INTERVAL_SECONDS") }}
+            - name: DISCORD_CONTEXT_DOCUMENTS_INTERVAL_SECONDS
+              value: {{ .Values.api.discordContextDocumentsIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_PERMISSION_MODE") }}
+            - name: DISCORD_ETL_PERMISSION_MODE
+              value: {{ .Values.api.discordEtlPermissionMode | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_EXCLUDED_CHANNEL_IDS") }}
+            - name: DISCORD_ETL_EXCLUDED_CHANNEL_IDS
+              value: {{ .Values.api.discordEtlExcludedChannelIds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS") }}
+            - name: DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS
+              value: {{ .Values.api.discordEtlExcludedChannelPatterns | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS") }}
+            - name: DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS
+              value: {{ .Values.api.discordEtlExcludedCategoryPatterns | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_ALLOWED_CATEGORY_IDS") }}
+            - name: DISCORD_ETL_ALLOWED_CATEGORY_IDS
+              value: {{ .Values.api.discordEtlAllowedCategoryIds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_ALLOWED_CATEGORY_PATTERNS") }}
+            - name: DISCORD_ETL_ALLOWED_CATEGORY_PATTERNS
+              value: {{ .Values.api.discordEtlAllowedCategoryPatterns | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_TYPICAL_CATEGORY_MIN_COUNT") }}
+            - name: DISCORD_ETL_TYPICAL_CATEGORY_MIN_COUNT
+              value: {{ .Values.api.discordEtlTypicalCategoryMinCount | quote }}
+{{- end }}
             - name: AGENT_IMAGE
               value: {{ printf "%s:%s" .Values.sandbox.image.repository .Values.sandbox.image.tag | quote }}
             - name: KUBERNETES_AGENT_IMAGE_PULL_POLICY

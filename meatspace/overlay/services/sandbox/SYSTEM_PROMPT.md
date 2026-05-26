@@ -17,6 +17,9 @@ Default behavior:
   question before cloning or editing code.
 - Preserve upstream Centaur behavior unless the current task explicitly calls
   for Meatspace-specific policy.
+- When asked about Meatspace, Dapital, company plans, prior decisions, or
+  "what are we building" context, search `company_context` first and ground the
+  answer in indexed Discord/company documents before relying on memory.
 - Prefer concise status updates while work is running and a direct final answer
   when the task is complete.
 

@@ -63,7 +63,24 @@
         "slackSyncIntervalSeconds": { "type": "integer" },
         "slackSyncLookbackDays": { "type": "integer" },
         "slackSyncThreadLookbackDays": { "type": "integer" },
-        "companyContextDocumentsIntervalSeconds": { "type": "integer" }
+        "companyContextDocumentsIntervalSeconds": { "type": "integer" },
+        "discordEtlEnabled": { "type": "boolean" },
+        "discordGuildId": { "type": "string" },
+        "discordSyncIntervalSeconds": { "type": "integer" },
+        "discordBackfillIntervalSeconds": { "type": "integer" },
+        "discordBackfillChannelBatchLimit": { "type": "integer" },
+        "discordBackfillPagesPerJob": { "type": "integer" },
+        "discordSyncRecentLimit": { "type": "integer" },
+        "discordSyncPagesPerChannel": { "type": "integer" },
+        "discordContextDocumentsIntervalSeconds": { "type": "integer" },
+        "discordEtlPermissionMode": { "type": "string" },
+        "discordEtlExcludedChannelIds": { "type": "string" },
+        "discordEtlExcludedChannelPatterns": { "type": "string" },
+        "discordEtlExcludedCategoryPatterns": { "type": "string" },
+        "discordEtlAllowedCategoryIds": { "type": "string" },
+        "discordEtlAllowedCategoryPatterns": { "type": "string" },
+        "discordEtlTypicalCategoryMinCount": { "type": "integer" },
+        "extraEnv": { "type": "object" }
       }
     },
     "overlay": {

@@ -6,6 +6,13 @@ api:
   executionWorkerEnabled: true
   workflowWorkerEnabled: true
   slackEtlEnabled: false
+  discordEtlEnabled: true
+  discordEtlPermissionMode: category_default
+  discordEtlExcludedCategoryPatterns: "*founder*,*founders*,*admin*,*private*,*sensitive*,*legal*,*finance*"
+  discordEtlTypicalCategoryMinCount: 2
+  discordBackfillIntervalSeconds: 60
+  discordBackfillChannelBatchLimit: 20
+  discordBackfillPagesPerJob: 5
   extraEnv:
     CENTAUR_DEPLOYMENT_NAME: warrunner
     CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY

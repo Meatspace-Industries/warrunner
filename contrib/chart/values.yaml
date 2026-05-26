@@ -64,6 +64,22 @@ api:
   slackSyncThreadLookbackDays: 3
   companyContextDocumentsIntervalSeconds: 14400
   slackEtlExcludedChannelPatterns: ""
+  discordEtlEnabled: false
+  discordGuildId: ""
+  discordSyncIntervalSeconds: 3600
+  discordBackfillIntervalSeconds: 60
+  discordBackfillChannelBatchLimit: 20
+  discordBackfillPagesPerJob: 5
+  discordSyncRecentLimit: 100
+  discordSyncPagesPerChannel: 2
+  discordContextDocumentsIntervalSeconds: 14400
+  discordEtlPermissionMode: category_default
+  discordEtlExcludedChannelIds: ""
+  discordEtlExcludedChannelPatterns: ""
+  discordEtlExcludedCategoryPatterns: ""
+  discordEtlAllowedCategoryIds: ""
+  discordEtlAllowedCategoryPatterns: ""
+  discordEtlTypicalCategoryMinCount: 2
   victoriaMetricsPushEnabled: false
   startupProbe:
     failureThreshold: 30

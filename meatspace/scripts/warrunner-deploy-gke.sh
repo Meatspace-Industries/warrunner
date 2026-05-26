@@ -261,6 +261,7 @@ helm_args=(
   --set discordbot.image.tag="$IMAGE_TAG"
   --set overlay.image.repository="$REGISTRY/warrunner-overlay"
   --set overlay.image.tag="$IMAGE_TAG"
+  --set-string "api.discordGuildId=$DISCORD_GUILD_ID"
   --set-string "discordbot.guildId=$DISCORD_GUILD_ID"
   --set-string "discordbot.botUserId=$DISCORD_BOT_USER_ID"
   --set-string "discordbot.homeForumChannelId=$HOME_FORUM_CHANNEL_ID"
