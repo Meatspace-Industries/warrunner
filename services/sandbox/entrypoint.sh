@@ -78,6 +78,13 @@ else
 fi
 
 CODEX_AUTH_JSON="${CENTAUR_CODEX_AUTH_JSON:-}"
+CODEX_COMMAND_NAME="$(basename "${1:-}")"
+CODEX_HARNESS_SELECTED=0
+case "$CODEX_COMMAND_NAME" in
+    codex-app-wrapper|codex-wrapper)
+        CODEX_HARNESS_SELECTED=1
+        ;;
+esac
 if [ -n "$CODEX_AUTH_JSON" ]; then
     if [ ! -r "$CODEX_AUTH_JSON" ]; then
         echo "configured Codex auth JSON is not readable: $CODEX_AUTH_JSON" >&2
@@ -103,6 +110,21 @@ if data.get("OPENAI_API_KEY"):
 PYEOF
     cp "$CODEX_AUTH_JSON" "$HOME_DIR/.codex/auth.json"
     chmod 600 "$HOME_DIR/.codex/auth.json" 2>/dev/null || true
+fi
+
+if [ "$CODEX_HARNESS_SELECTED" = "1" ]; then
+    if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ]; then
+        echo "fatal: codex_api_key_login_disabled; use mounted ChatGPT auth JSON via CENTAUR_CODEX_AUTH_JSON" >&2
+        exit 1
+    fi
+    if [ -z "$CODEX_AUTH_JSON" ]; then
+        echo "fatal: codex_chatgpt_auth_required; CENTAUR_CODEX_AUTH_JSON must point at mounted ChatGPT auth JSON" >&2
+        exit 1
+    fi
+    if [ ! -f "$HOME_DIR/.codex/auth.json" ]; then
+        echo "fatal: codex_chatgpt_auth_install_failed; expected $HOME_DIR/.codex/auth.json before readiness" >&2
+        exit 1
+    fi
 fi
 
 codex_laminar_trace_endpoint="${CODEX_OTEL_LAMINAR_ENDPOINT:-}"
@@ -223,13 +245,6 @@ cd "$WORKSPACE_DIR"
 HARNESS_ADAPTER="${CENTAUR_HARNESS_ADAPTER:-/usr/local/bin/harness-adapter}"
 if [ -x "$HARNESS_ADAPTER" ]; then
     "$HARNESS_ADAPTER" "${1:-}" "$TARGET_PROMPT"
-fi
-
-# Codex reads its auth file when the app server starts. Complete this before
-# signaling readiness, otherwise warm pods can be claimed with no auth loaded.
-CODEX_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
-if [ -z "$CODEX_AUTH_JSON" ] && [ -n "$CODEX_KEY" ]; then
-    echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
 fi
 
 # Signal readiness

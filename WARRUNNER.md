@@ -68,6 +68,11 @@ sandbox Pods, omits the `OPENAI_API_KEY` harness stub for those Pods, and the
 sandbox entrypoint installs the mounted ChatGPT auth file before
 `codex app-server` starts.
 
+Codex sandboxes fail before readiness if `CENTAUR_CODEX_AUTH_JSON` is missing,
+if the mounted auth file cannot be installed, or if either `OPENAI_API_KEY` or
+`CODEX_API_KEY` is present in the sandbox environment. API-key Codex login is
+disabled rather than used as a fallback.
+
 The same values file sets `CENTAUR_DISABLED_INFRA_SECRETS=OPENAI_API_KEY` on
 the API deployment so Warrunner's generated iron-proxy configs do not reference
 or resolve an OpenAI API key at all.

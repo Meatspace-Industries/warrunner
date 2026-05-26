@@ -2,7 +2,9 @@
 
 Warrunner runs Codex from ChatGPT login auth, not OpenAI API billing. Do not add
 `OPENAI_API_KEY` to the deploy env file, the shared Kubernetes Secret, or Helm
-values. The bootstrap and deploy wrappers reject that key.
+values. The bootstrap and deploy wrappers reject that key, and Codex sandbox
+pods fail before readiness if mounted ChatGPT auth is missing or an API-key env
+is present.
 
 ## Inputs
 
