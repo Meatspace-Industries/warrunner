@@ -10,7 +10,7 @@ values. The bootstrap and deploy wrappers reject that key.
 - Namespace: `centaur-system`
 - Deploy env: `~/.config/warrunner/deploy.env`
 - Codex auth: `~/.codex/auth.json` from a local `codex login`
-- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:c41aac82`
+- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:d99cc795`
 
 Create the deploy env from the template:
 
@@ -30,7 +30,9 @@ Get the bot token from Discord Developer Portal:
 3. Enable Guilds, Guild Messages, and Message Content intents.
 4. Invite the bot with permissions to view channels, read message history, send
    messages, create public threads, and send messages in threads.
-5. Confirm it can access forum channel `1508220472569888950`.
+5. Confirm it can access the Warrunner home channel `1508220472569888950`.
+   The integration supports forum threads, but this Meatspace deploy currently
+   uses that home text channel with bot mentions required for top-level turns.
 
 ## Bootstrap
 

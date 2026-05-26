@@ -22,7 +22,7 @@ usage() {
 Usage: meatspace/scripts/warrunner-deploy-gke.sh [options]
 
 Deploys Warrunner to the dapp GKE cluster with the built Artifact Registry
-images and the Discord forum-thread routing. Live deploys require the Kubernetes
+images and the Discord forum/home-channel routing. Live deploys require the Kubernetes
 Secrets created by warrunner-bootstrap-k8s-secrets.sh.
 
 Options:
@@ -32,7 +32,7 @@ Options:
   --project <id>            Google Cloud project. Default: dapp-455423
   --location <name>         Artifact Registry location. Default: us-west1
   --repository <name>       Artifact Registry repository. Default: warrunner
-  --image-tag <tag>         Image tag. Default: c18c9729
+  --image-tag <tag>         Image tag. Default: d99cc795
   --env-file <path>         Deploy env file. Default: ~/.config/warrunner/deploy.env
   --render-only             Render Helm manifests and verify invariants; do not deploy
   --skip-image-check        Do not verify image tags in Artifact Registry
