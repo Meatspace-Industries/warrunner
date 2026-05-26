@@ -58,6 +58,12 @@ export class DiscordClient {
     })
   }
 
+  async triggerTyping(channelId: string): Promise<void> {
+    await this.request<void>(`/channels/${encodeURIComponent(channelId)}/typing`, {
+      method: 'POST'
+    })
+  }
+
   async createForumThread(
     channelId: string,
     body: {

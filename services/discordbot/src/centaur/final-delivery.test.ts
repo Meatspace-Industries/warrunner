@@ -69,8 +69,12 @@ describe('pollFinalDeliveriesOnce', () => {
         return { id: `posted-${posts.length}`, channel_id: channelId, content: body.content }
       }
     } as any
+    const typingStops: Array<{ threadKey?: string; channelId?: string }> = []
 
-    const result = await pollFinalDeliveriesOnce(config, client)
+    const result = await pollFinalDeliveriesOnce(config, client, {
+      start: () => {},
+      stop: target => typingStops.push(target)
+    })
 
     expect(result.delivered).toHaveLength(1)
     expect(posts.length).toBeGreaterThan(1)
@@ -88,6 +92,12 @@ describe('pollFinalDeliveriesOnce', () => {
     })
     expect(posts.slice(1).every(post => post.body.message_reference === undefined)).toBe(true)
     expect(delivered[0]).toStartWith('discordbot-')
+    expect(typingStops).toEqual([
+      {
+        threadKey: 'discord:guild-1:forum-1:thread-1',
+        channelId: 'thread-1'
+      }
+    ])
   })
 
   it('posts legacy final deliveries without a message reference', async () => {
@@ -185,8 +195,12 @@ describe('pollFinalDeliveriesOnce', () => {
         throw new Error('discord_forbidden: Missing Permissions')
       }
     } as any
+    const typingStops: Array<{ threadKey?: string; channelId?: string }> = []
 
-    const result = await pollFinalDeliveriesOnce(config, client)
+    const result = await pollFinalDeliveriesOnce(config, client, {
+      start: () => {},
+      stop: target => typingStops.push(target)
+    })
 
     expect(result.delivered).toHaveLength(0)
     expect(result.failed).toEqual([
@@ -205,5 +219,11 @@ describe('pollFinalDeliveriesOnce', () => {
       error_class: 'discord_forbidden',
       non_retryable: true
     })
+    expect(typingStops).toEqual([
+      {
+        threadKey: 'discord:guild-1:forum-1:thread-1',
+        channelId: 'thread-1'
+      }
+    ])
   })
 })

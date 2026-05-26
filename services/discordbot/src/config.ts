@@ -42,6 +42,9 @@ const EnvSchema = z.object({
   WARRUNNER_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(40),
   WARRUNNER_REQUIRE_HOME_THREAD: BoolFromEnv,
   WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED: BoolFromEnv,
+  WARRUNNER_TYPING_ENABLED: BoolFromEnv,
+  WARRUNNER_TYPING_REFRESH_MS: z.coerce.number().int().min(1000).default(8000),
+  WARRUNNER_TYPING_TIMEOUT_MS: z.coerce.number().int().min(1000).default(600_000),
   DISCORD_GATEWAY_RECONNECT_MS: z.coerce.number().int().min(1000).default(5000)
 })
 

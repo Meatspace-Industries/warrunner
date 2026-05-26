@@ -16,6 +16,8 @@ type CapturedRequest = {
 const workflowRuns: CapturedRequest[] = []
 const discordPosts: CapturedRequest[] = []
 const delivered: CapturedRequest[] = []
+const typingStarts: Array<{ threadKey?: string; channelId?: string }> = []
+const typingStops: Array<{ threadKey?: string; channelId?: string }> = []
 let finalDeliveryReady = false
 let finalDeliveryClaimed = false
 
@@ -138,6 +140,8 @@ beforeEach(() => {
   workflowRuns.length = 0
   discordPosts.length = 0
   delivered.length = 0
+  typingStarts.length = 0
+  typingStops.length = 0
   finalDeliveryReady = false
   finalDeliveryClaimed = false
 })
@@ -152,11 +156,15 @@ describe('Discord Gateway chat loop', () => {
     const discord = new DiscordClient(config)
     const channels = new DiscordChannelResolver(discord)
     const handoff = new CentaurHandoff(config)
+    const typing = {
+      start: (target: { threadKey?: string; channelId?: string }) => typingStarts.push(target),
+      stop: (target: { threadKey?: string; channelId?: string }) => typingStops.push(target)
+    }
     const handle = startDiscordGateway({
       config,
       client: discord,
       channelResolver: channels,
-      onMessage: createDiscordMessageProcessor({ config, discord, channels, handoff })
+      onMessage: createDiscordMessageProcessor({ config, discord, channels, handoff, typing })
     })
 
     try {
@@ -184,8 +192,14 @@ describe('Discord Gateway chat loop', () => {
       })
       expect(workflowRuns[0]?.body.input.parts[0].text).toBe('dogfood the full chat loop')
       expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(2)
+      expect(typingStarts).toEqual([
+        {
+          threadKey: 'discord:guild-1:forum-1:thread-1',
+          channelId: 'thread-1'
+        }
+      ])
 
-      await pollFinalDeliveriesOnce(config, discord)
+      await pollFinalDeliveriesOnce(config, discord, typing)
 
       expect(discordPosts).toHaveLength(1)
       expect(discordPosts[0]).toMatchObject({
@@ -203,6 +217,12 @@ describe('Discord Gateway chat loop', () => {
         }
       })
       expect(delivered).toHaveLength(1)
+      expect(typingStops).toEqual([
+        {
+          threadKey: 'discord:guild-1:forum-1:thread-1',
+          channelId: 'thread-1'
+        }
+      ])
     } finally {
       handle?.stop()
     }

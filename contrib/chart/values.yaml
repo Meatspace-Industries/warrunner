@@ -160,6 +160,9 @@ discordbot:
   historyLimit: 40
   requireHomeThread: true
   homeChannelMentionRequired: true
+  typingEnabled: true
+  typingRefreshMs: 8000
+  typingTimeoutMs: 600000
   gatewayEnabled: true
   extraEnv: {}
   resources: {}

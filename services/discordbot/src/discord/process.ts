@@ -3,6 +3,7 @@ import type { AppConfig } from '../config'
 import { logError, logWarn } from '../logging'
 import type { DiscordChannelResolver, DiscordClient } from './client'
 import { normalizeDiscordMessage } from './normalize'
+import type { DiscordTypingIndicator } from './typing'
 import type { DiscordMessage, NormalizedDiscordEvent } from './types'
 
 export type DiscordHandoff = {
@@ -14,6 +15,7 @@ export function createDiscordMessageProcessor(opts: {
   discord: DiscordClient
   channels: DiscordChannelResolver
   handoff: DiscordHandoff
+  typing?: DiscordTypingIndicator
 }): (message: DiscordMessage) => Promise<void> {
   return async function processDiscordMessage(message: DiscordMessage): Promise<void> {
     const parentChannelId = await parentChannelIdFor(opts.channels, message)
@@ -23,6 +25,11 @@ export function createDiscordMessageProcessor(opts: {
       parentChannelId
     })
     if (!shallow) return
+
+    opts.typing?.start({
+      threadKey: shallow.thread_key,
+      channelId: shallow.channel_id
+    })
 
     const historyMessages =
       opts.config.WARRUNNER_HISTORY_LIMIT > 0
@@ -43,15 +50,33 @@ export function createDiscordMessageProcessor(opts: {
       parentChannelId,
       historyMessages
     })
-    if (!normalized) return
-
-    const result = await opts.handoff.emit(normalized)
-    if (!result.ok) {
-      logError('centaur_handoff_failed', {
-        status: result.status,
-        body: result.body,
-        thread_key: normalized.thread_key
+    if (!normalized) {
+      opts.typing?.stop({
+        threadKey: shallow.thread_key,
+        channelId: shallow.channel_id
       })
+      return
+    }
+
+    try {
+      const result = await opts.handoff.emit(normalized)
+      if (!result.ok) {
+        opts.typing?.stop({
+          threadKey: normalized.thread_key,
+          channelId: normalized.channel_id
+        })
+        logError('centaur_handoff_failed', {
+          status: result.status,
+          body: result.body,
+          thread_key: normalized.thread_key
+        })
+      }
+    } catch (error) {
+      opts.typing?.stop({
+        threadKey: normalized.thread_key,
+        channelId: normalized.channel_id
+      })
+      throw error
     }
   }
 }

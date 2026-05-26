@@ -155,6 +155,9 @@
         "historyLimit": { "type": "integer" },
         "requireHomeThread": { "type": "boolean" },
         "homeChannelMentionRequired": { "type": "boolean" },
+        "typingEnabled": { "type": "boolean" },
+        "typingRefreshMs": { "type": "integer" },
+        "typingTimeoutMs": { "type": "integer" },
         "gatewayEnabled": { "type": "boolean" },
         "extraEnv": { "type": "object" },
         "resources": { "type": "object" }

@@ -660,6 +660,18 @@ spec:
             - name: WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED
               value: {{ ternary "true" "false" .Values.discordbot.homeChannelMentionRequired | quote }}
 {{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_TYPING_ENABLED") }}
+            - name: WARRUNNER_TYPING_ENABLED
+              value: {{ ternary "true" "false" .Values.discordbot.typingEnabled | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_TYPING_REFRESH_MS") }}
+            - name: WARRUNNER_TYPING_REFRESH_MS
+              value: {{ .Values.discordbot.typingRefreshMs | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_TYPING_TIMEOUT_MS") }}
+            - name: WARRUNNER_TYPING_TIMEOUT_MS
+              value: {{ .Values.discordbot.typingTimeoutMs | quote }}
+{{- end }}
 {{- if not (hasKey $discordbotExtraEnv "DISCORD_GATEWAY_ENABLED") }}
             - name: DISCORD_GATEWAY_ENABLED
               value: {{ ternary "true" "false" .Values.discordbot.gatewayEnabled | quote }}

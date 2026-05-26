@@ -8,6 +8,7 @@ import { centaurApiKey, loadConfig } from './config'
 import { DiscordChannelResolver, DiscordClient } from './discord/client'
 import { startDiscordGateway } from './discord/gateway'
 import { createDiscordMessageProcessor } from './discord/process'
+import { DiscordTypingRegistry } from './discord/typing'
 import type { DiscordGatewayPayload, DiscordMessage } from './discord/types'
 import { logError, logInfo, logWarn } from './logging'
 import {
@@ -20,11 +21,19 @@ const config = loadConfig()
 const discord = new DiscordClient(config)
 const channels = new DiscordChannelResolver(discord)
 const handoff = new CentaurHandoff(config)
+const typing = config.WARRUNNER_TYPING_ENABLED
+  ? new DiscordTypingRegistry({
+      client: discord,
+      refreshMs: config.WARRUNNER_TYPING_REFRESH_MS,
+      timeoutMs: config.WARRUNNER_TYPING_TIMEOUT_MS
+    })
+  : undefined
 const processDiscordMessage = createDiscordMessageProcessor({
   config,
   discord,
   channels,
-  handoff
+  handoff,
+  typing
 })
 const botIdentityState: BotIdentityState = initialBotIdentityState(config)
 const botIdentityReady = hydrateBotUserId()
@@ -112,7 +121,7 @@ app.post('/api/discord/messages', apiKeyMiddleware, async c => {
   return c.json({ ok: true, channel_id: response.channel_id, id: response.id })
 })
 
-startFinalDeliveryPoller(config, discord)
+startFinalDeliveryPoller(config, discord, typing)
 startDiscordGateway({
   config,
   client: discord,

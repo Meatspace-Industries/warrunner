@@ -11,6 +11,7 @@ type CapturedRequest = {
 const workflowRuns: CapturedRequest[] = []
 const discordPosts: CapturedRequest[] = []
 const delivered: CapturedRequest[] = []
+const typingPosts: CapturedRequest[] = []
 let finalDeliveryReady = false
 let finalDeliveryClaimed = false
 
@@ -118,9 +119,17 @@ const server = Bun.serve({
       discordPosts.push({ path: url.pathname, body: await request.json() })
       return Response.json({ id: 'posted-1', channel_id: 'thread-1' })
     }
+    if (url.pathname === '/channels/thread-1/typing' && request.method === 'POST') {
+      typingPosts.push({ path: url.pathname, body: {} })
+      return new Response(null, { status: 204 })
+    }
     if (url.pathname === '/channels/home-1/messages' && request.method === 'POST') {
       discordPosts.push({ path: url.pathname, body: await request.json() })
       return Response.json({ id: 'posted-home-1', channel_id: 'home-1' })
+    }
+    if (url.pathname === '/channels/home-1/typing' && request.method === 'POST') {
+      typingPosts.push({ path: url.pathname, body: {} })
+      return new Response(null, { status: 204 })
     }
     return Response.json({ error: 'not_found', path: url.pathname }, { status: 404 })
   },
@@ -154,6 +163,7 @@ beforeEach(() => {
   workflowRuns.length = 0
   discordPosts.length = 0
   delivered.length = 0
+  typingPosts.length = 0
   finalDeliveryReady = false
   finalDeliveryClaimed = false
 })
@@ -219,6 +229,7 @@ describe('discordbot local e2e', () => {
     })
     expect(workflowRuns[0]?.body.input.parts[0].text).toBe('ship the dogfood path')
     expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(2)
+    await waitFor(() => typingPosts.some(post => post.path === '/channels/thread-1/typing'))
   })
 
   it('accepts a bot-mentioned home-channel message and starts a stable home workflow', async () => {
@@ -258,6 +269,7 @@ describe('discordbot local e2e', () => {
     })
     expect(workflowRuns[0]?.body.input.metadata.is_mention).toBe(true)
     expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(1)
+    await waitFor(() => typingPosts.some(post => post.path === '/channels/home-1/typing'))
   })
 
   it('claims a final delivery and posts back into the Discord thread', async () => {
