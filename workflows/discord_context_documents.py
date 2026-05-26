@@ -15,7 +15,11 @@ from api.vm_metrics import (
     record_company_context_documents_changed,
 )
 from api.workflow_engine import WorkflowContext
-from workflows.discord_sync_shared import env_flag_enabled, positive_int
+from workflows.discord_sync_shared import (
+    env_flag_enabled,
+    positive_int,
+    purge_invalid_thread_message_rows,
+)
 
 WORKFLOW_NAME = "discord_context_documents"
 
@@ -142,7 +146,14 @@ async def _load_lookup_maps(pool) -> tuple[dict[str, str], dict[str, str]]:
         "SELECT user_id, username, global_name, display_name FROM discord_sync_users",
     )
     channels = await pool.fetch(
-        "SELECT channel_id, channel_name FROM discord_sync_channels",
+        "SELECT channels.channel_id, channels.channel_name "
+        "FROM discord_sync_channels channels "
+        "WHERE channels.is_syncable = TRUE "
+        "   OR EXISTS ("
+        "       SELECT 1 FROM discord_sync_channels child "
+        "       WHERE child.parent_id = channels.channel_id "
+        "         AND child.is_syncable = TRUE"
+        "   )",
     )
     users_by_id = {str(row["user_id"]): _display_name(row) for row in users}
     channels_by_id = {
@@ -164,10 +175,12 @@ async def _load_changed_keys(pool, since: dt.datetime | None) -> dict[str, Any]:
         "SELECT DISTINCT m.channel_id, (m.occurred_at AT TIME ZONE 'UTC')::date AS day "
         "FROM discord_sync_messages m "
         "JOIN discord_sync_channels c ON c.channel_id = m.channel_id "
+        "LEFT JOIN discord_sync_channels tc ON tc.channel_id = m.thread_id "
         f"{where_sql} "
         f"{'AND' if where_sql else 'WHERE'} m.occurred_at IS NOT NULL "
         "  AND c.is_syncable = TRUE "
         "  AND c.is_thread = FALSE "
+        "  AND (m.thread_id IS NULL OR tc.is_syncable = TRUE) "
         "ORDER BY m.channel_id, day",
         *args,
     )
@@ -175,11 +188,12 @@ async def _load_changed_keys(pool, since: dt.datetime | None) -> dict[str, Any]:
         "SELECT DISTINCT COALESCE(m.thread_id, m.channel_id) AS thread_id "
         "FROM discord_sync_messages m "
         "JOIN discord_sync_channels c ON c.channel_id = m.channel_id "
-        "LEFT JOIN discord_sync_channels tc ON tc.channel_id = COALESCE(m.thread_id, m.channel_id) "
+        "JOIN discord_sync_channels tc "
+        "  ON tc.channel_id = COALESCE(m.thread_id, m.channel_id) "
+        " AND tc.is_syncable = TRUE "
         f"{where_sql} "
         f"{'AND' if where_sql else 'WHERE'} (c.is_thread = TRUE OR m.thread_id IS NOT NULL) "
         "  AND c.is_syncable = TRUE "
-        "  AND COALESCE(tc.is_syncable, c.is_syncable) = TRUE "
         "ORDER BY thread_id",
         *args,
     )
@@ -213,9 +227,11 @@ async def _load_channel_day_messages(pool, channel_id: str, day: dt.date) -> lis
             "m.content, m.attachment_count, m.embed_count, m.updated_at "
             "FROM discord_sync_messages m "
             "LEFT JOIN discord_sync_channels c ON c.channel_id = m.channel_id "
+            "LEFT JOIN discord_sync_channels tc ON tc.channel_id = m.thread_id "
             "LEFT JOIN discord_sync_users u ON u.user_id = m.author_id "
             "WHERE m.channel_id = $1 "
             "  AND c.is_syncable = TRUE "
+            "  AND (m.thread_id IS NULL OR tc.is_syncable = TRUE) "
             "  AND m.occurred_at >= $2 "
             "  AND m.occurred_at < $3 "
             "ORDER BY m.occurred_at, m.message_id",
@@ -237,12 +253,13 @@ async def _load_thread_messages(pool, thread_id: str) -> list[Any]:
             "m.attachment_count, m.embed_count, m.updated_at "
             "FROM discord_sync_messages m "
             "LEFT JOIN discord_sync_channels c ON c.channel_id = m.channel_id "
-            "LEFT JOIN discord_sync_channels tc ON tc.channel_id = COALESCE(m.thread_id, m.channel_id) "
+            "JOIN discord_sync_channels tc "
+            "  ON tc.channel_id = COALESCE(m.thread_id, m.channel_id) "
+            " AND tc.is_syncable = TRUE "
             "LEFT JOIN discord_sync_channels pc ON pc.channel_id = tc.parent_id "
             "LEFT JOIN discord_sync_users u ON u.user_id = m.author_id "
             "WHERE (m.channel_id = $1 OR m.thread_id = $1) "
             "  AND c.is_syncable = TRUE "
-            "  AND COALESCE(tc.is_syncable, c.is_syncable) = TRUE "
             "ORDER BY m.occurred_at, m.message_id",
             thread_id,
         )
@@ -482,10 +499,11 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         else None
     )
 
+    cleanup = await purge_invalid_thread_message_rows(ctx._pool)
     users_by_id, channels_by_id = await _load_lookup_maps(ctx._pool)
     changed = await _load_changed_keys(ctx._pool, since)
     documents_upserted = 0
-    documents_deleted = 0
+    documents_deleted = int(cleanup["documents_deleted"])
 
     for channel_id, day in changed["channel_days"]:
         messages = await _load_channel_day_messages(ctx._pool, channel_id, day)
@@ -547,6 +565,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         "thread_candidates": len(changed["threads"]),
         "documents_upserted": documents_upserted,
         "documents_deleted": documents_deleted,
+        "invalid_thread_messages_purged": cleanup["messages_deleted"],
         "watermark": watermark.isoformat() if watermark else None,
     }
     ctx.log("discord_context_documents_completed", **result)

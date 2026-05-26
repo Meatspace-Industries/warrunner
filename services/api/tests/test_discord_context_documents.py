@@ -165,3 +165,55 @@ async def test_projects_discord_channel_day_and_thread_documents(db_pool):
     assert "Parent channel: #dapital" in thread["body"]
     assert "Participants: Alice, Bob" in thread["body"]
     assert json.loads(thread["metadata"])["aggregation"] == "thread"
+
+
+@pytest.mark.asyncio
+async def test_purges_legacy_parent_messages_with_missing_thread_metadata(db_pool):
+    from workflows import discord_context_documents
+
+    await _seed_discord_basics(db_pool)
+    await db_pool.execute(
+        "DELETE FROM discord_sync_channels WHERE channel_id = 'thread-roadmap'",
+    )
+    base = dt.datetime(2026, 5, 20, 12, 0, tzinfo=dt.timezone.utc)
+    updated = dt.datetime(2026, 5, 20, 12, 30, tzinfo=dt.timezone.utc)
+    await _insert_discord_message(
+        db_pool,
+        channel_id="forum-dapital",
+        message_id="msg-starter",
+        occurred_at=base,
+        updated_at=updated,
+        author_id="1001",
+        content="starter content should not survive without syncable thread metadata",
+        thread_id="thread-roadmap",
+    )
+    await db_pool.execute(
+        "INSERT INTO company_context_documents ("
+        "document_id, source, source_type, source_document_id, title, body, metadata"
+        ") VALUES ("
+        "'discord:channel_day:forum-dapital:2026-05-20', "
+        "'discord', 'discord_channel_day', 'forum-dapital:2026-05-20', "
+        "'#dapital - 2026-05-20', "
+        "'starter content should not survive without syncable thread metadata', "
+        '\'{"channel_id":"forum-dapital","date":"2026-05-20","aggregation":"channel_day"}\'::jsonb'
+        ")",
+    )
+
+    result = await discord_context_documents.handler(
+        discord_context_documents.Input(watermark_overlap_seconds=0),
+        FakeCtx(db_pool, run_id="wfr-test-discord-context-purge-invalid-thread"),
+    )
+
+    assert result["status"] == "completed"
+    assert result["invalid_thread_messages_purged"] == 1
+    assert result["documents_deleted"] == 1
+    assert result["documents_upserted"] == 0
+    assert (
+        await db_pool.fetchval("SELECT COUNT(*)::int FROM discord_sync_messages") == 0
+    )
+    assert (
+        await db_pool.fetchval(
+            "SELECT COUNT(*)::int FROM company_context_documents",
+        )
+        == 0
+    )

@@ -20,6 +20,7 @@ from workflows.discord_sync_shared import (
     BACKFILL_JOB_THREAD_DISCOVERY,
     DISCORD_CHANNEL_GUILD_CATEGORY,
     DISCORD_CHANNEL_PRIVATE_THREAD,
+    DiscordApiError,
     MESSAGE_CONTAINER_TYPES,
     SYNCABLE_PARENT_TYPES,
     THREAD_PARENT_TYPES,
@@ -28,6 +29,7 @@ from workflows.discord_sync_shared import (
     channel_ref,
     channel_row,
     client as shared_client,
+    embedded_thread_id,
     enqueue_backfill_job,
     env_flag_enabled,
     failure_reason,
@@ -234,6 +236,131 @@ def _channel_exclusion_reason(
     return None
 
 
+def _thread_exclusion_reason(
+    thread: dict[str, Any],
+    *,
+    excluded_ids: set[str],
+    excluded_channel_patterns: list[str],
+) -> str | None:
+    thread_id = str(thread.get("id") or "")
+    parent_id = str(thread.get("parent_id") or "")
+    if int(thread.get("type") or 0) == DISCORD_CHANNEL_PRIVATE_THREAD:
+        return "excluded_private_thread"
+    if thread_id in excluded_ids:
+        return "excluded_by_id"
+    if parent_id in excluded_ids:
+        return "excluded_by_parent_id"
+    pattern = _pattern_match(_channel_name(thread), excluded_channel_patterns)
+    if pattern:
+        return f"excluded_by_channel_pattern:{pattern}"
+    return None
+
+
+def _redacted_channel_ref(channel: dict[str, Any], reason: str) -> dict[str, str]:
+    return {
+        "channel_id": str(channel.get("id") or ""),
+        "channel_name": "",
+        "reason": reason,
+    }
+
+
+async def _syncable_embedded_thread_ids(pool, thread_ids: set[str]) -> set[str]:
+    if not thread_ids:
+        return set()
+    rows = await pool.fetch(
+        "SELECT channel_id FROM discord_sync_channels "
+        "WHERE channel_id = ANY($1::text[]) AND is_syncable = TRUE",
+        sorted(thread_ids),
+    )
+    return {str(row["channel_id"]) for row in rows}
+
+
+async def _filter_messages_for_sync_scope(
+    pool,
+    messages: list[dict[str, Any]],
+    *,
+    is_thread_channel: bool,
+    guild_id: str,
+    excluded_ids: set[str],
+    excluded_channel_patterns: list[str],
+) -> list[dict[str, Any]]:
+    if is_thread_channel or not messages:
+        return messages
+
+    allowed_thread_ids = await _syncable_embedded_thread_ids(
+        pool,
+        {
+            embedded_thread_id(message)
+            for message in messages
+            if embedded_thread_id(message)
+        },
+    )
+    kept: list[dict[str, Any]] = []
+    purge_thread_ids: list[str] = []
+    for message in messages:
+        thread = (
+            message.get("thread") if isinstance(message.get("thread"), dict) else {}
+        )
+        thread_id = str(thread.get("id") or "")
+        if not thread_id:
+            kept.append(message)
+            continue
+        thread_for_exclusion = {
+            **thread,
+            "guild_id": thread.get("guild_id") or guild_id,
+        }
+        reason = _thread_exclusion_reason(
+            thread_for_exclusion,
+            excluded_ids=excluded_ids,
+            excluded_channel_patterns=excluded_channel_patterns,
+        )
+        if reason:
+            purge_thread_ids.append(thread_id)
+            continue
+        if thread_id not in allowed_thread_ids:
+            continue
+        kept.append(message)
+
+    if purge_thread_ids:
+        await purge_channels_from_sync_scope(
+            pool,
+            purge_thread_ids,
+            delete_channel_rows=True,
+        )
+    return kept
+
+
+async def _stored_excluded_thread_ids(
+    pool,
+    *,
+    guild_id: str,
+    excluded_ids: set[str],
+    excluded_channel_patterns: list[str],
+) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT channel_id, parent_id, channel_name, channel_type "
+        "FROM discord_sync_channels "
+        "WHERE guild_id = $1 AND is_thread = TRUE AND is_syncable = TRUE",
+        guild_id,
+    )
+    excluded: list[str] = []
+    for row in rows:
+        channel_id = str(row["channel_id"] or "")
+        reason = _thread_exclusion_reason(
+            {
+                "id": channel_id,
+                "parent_id": str(row["parent_id"] or ""),
+                "name": str(row["channel_name"] or ""),
+                "type": int(row["channel_type"] or 0),
+            },
+            excluded_ids=excluded_ids,
+            excluded_channel_patterns=excluded_channel_patterns,
+        )
+        if reason:
+            excluded.append(channel_id)
+    return excluded
+
+
 def _split_syncable_channels(
     channels: list[dict[str, Any]],
     *,
@@ -312,6 +439,8 @@ async def _sync_recent_messages(
     run_id: str,
     limit: int,
     pages_per_channel: int,
+    excluded_ids: set[str],
+    excluded_channel_patterns: list[str],
 ) -> tuple[int, int, str | None, str | None]:
     channel_id = str(channel.get("id") or "")
     parent_channel_id = str(channel.get("parent_id") or "")
@@ -347,6 +476,23 @@ async def _sync_recent_messages(
         if not filtered_page:
             reached_checkpoint = bool(after_id)
             break
+        filtered_page = await _filter_messages_for_sync_scope(
+            pool,
+            filtered_page,
+            is_thread_channel=is_thread_channel,
+            guild_id=guild_id,
+            excluded_ids=excluded_ids,
+            excluded_channel_patterns=excluded_channel_patterns,
+        )
+        if not filtered_page:
+            page_oldest_id = oldest_snowflake(
+                [str(message.get("id") or "") for message in page]
+            )
+            if page_oldest_id:
+                seen_page_before = page_oldest_id
+            if len(page) < limit:
+                break
+            continue
         rows = [
             message_row(
                 message,
@@ -445,51 +591,98 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         for channel in all_channels
         if int(channel.get("type") or 0) in SYNCABLE_PARENT_TYPES
     ]
+    excluded_ids = _csv_set(os.getenv("DISCORD_ETL_EXCLUDED_CHANNEL_IDS"))
+    excluded_channel_patterns = _glob_patterns(
+        os.getenv("DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS")
+    )
+    excluded_category_patterns = _glob_patterns(
+        os.getenv("DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS")
+    )
+
     syncable_parents, skipped_parent_rows = _split_syncable_channels(
         candidate_parents,
         categories_by_id=categories_by_id,
-        excluded_ids=_csv_set(os.getenv("DISCORD_ETL_EXCLUDED_CHANNEL_IDS")),
-        excluded_channel_patterns=_glob_patterns(
-            os.getenv("DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS")
-        ),
-        excluded_category_patterns=_glob_patterns(
-            os.getenv("DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS")
-        ),
+        excluded_ids=excluded_ids,
+        excluded_channel_patterns=excluded_channel_patterns,
+        excluded_category_patterns=excluded_category_patterns,
         allowed_category_ids=allowed_category_ids,
         allowed_category_patterns=allowed_category_patterns,
         typical_category_signatures=typical_category_signatures,
         permission_mode=permission_mode,
     )
     syncable_parent_ids = {str(channel.get("id") or "") for channel in syncable_parents}
+    syncable_category_ids = {
+        str(channel.get("parent_id") or "")
+        for channel in syncable_parents
+        if str(channel.get("parent_id") or "")
+    }
 
-    channel_rows = [
-        channel_row(channel, guild_id=guild_id, is_syncable=False)
-        for channel in all_channels
-        if int(channel.get("type") or 0) == DISCORD_CHANNEL_GUILD_CATEGORY
-    ]
+    current_category_ids: set[str] = set()
+    channel_rows: list[dict[str, Any]] = []
+    for channel in all_channels:
+        if int(channel.get("type") or 0) != DISCORD_CHANNEL_GUILD_CATEGORY:
+            continue
+        category_id = str(channel.get("id") or "")
+        current_category_ids.add(category_id)
+        if category_id not in syncable_category_ids:
+            continue
+        channel_rows.append(channel_row(channel, guild_id=guild_id, is_syncable=False))
     channel_rows.extend(
         channel_row(channel, guild_id=guild_id, is_syncable=True)
         for channel in syncable_parents
     )
-    channel_rows.extend(
-        channel_row(
-            channel,
-            guild_id=guild_id,
-            is_syncable=False,
-            reason=reason,
-        )
-        for channel, reason in skipped_parent_rows
-    )
     await upsert_channels(ctx._pool, channel_rows)
     record_etl_items_seen("discord", "channel", "channel", len(candidate_parents))
     record_etl_items_upserted("discord", "channel", "channel", len(syncable_parents))
+    stored_out_of_scope_category_ids = [
+        str(row["channel_id"])
+        for row in await ctx._pool.fetch(
+            "SELECT channel_id FROM discord_sync_channels "
+            "WHERE guild_id = $1 "
+            "  AND is_category = TRUE "
+            "  AND NOT (channel_id = ANY($2::text[]))",
+            guild_id,
+            sorted(syncable_category_ids),
+        )
+    ]
+    legacy_skipped_channel_ids = [
+        str(row["channel_id"])
+        for row in await ctx._pool.fetch(
+            "SELECT channel_id FROM discord_sync_channels "
+            "WHERE guild_id = $1 "
+            "  AND is_category = FALSE "
+            "  AND is_syncable = FALSE",
+            guild_id,
+        )
+    ]
+    category_ids_to_purge = sorted(
+        (current_category_ids - syncable_category_ids)
+        | set(stored_out_of_scope_category_ids)
+    )
+    stored_excluded_thread_ids = await _stored_excluded_thread_ids(
+        ctx._pool,
+        guild_id=guild_id,
+        excluded_ids=excluded_ids,
+        excluded_channel_patterns=excluded_channel_patterns,
+    )
 
-    active_threads = [
+    active_thread_candidates = [
         thread
         for thread in await asyncio.to_thread(api_client.list_active_threads, guild_id)
         if str(thread.get("parent_id") or "") in syncable_parent_ids
-        and int(thread.get("type") or 0) != DISCORD_CHANNEL_PRIVATE_THREAD
     ]
+    active_threads: list[dict[str, Any]] = []
+    skipped_active_thread_rows: list[tuple[dict[str, Any], str]] = []
+    for thread in active_thread_candidates:
+        reason = _thread_exclusion_reason(
+            thread,
+            excluded_ids=excluded_ids,
+            excluded_channel_patterns=excluded_channel_patterns,
+        )
+        if reason:
+            skipped_active_thread_rows.append((thread, reason))
+        else:
+            active_threads.append(thread)
     await upsert_channels(
         ctx._pool,
         [
@@ -506,14 +699,25 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     )
     purged_scope = await purge_channels_from_sync_scope(
         ctx._pool,
-        sorted(stale_channel_ids)
+        category_ids_to_purge
+        + legacy_skipped_channel_ids
+        + stored_excluded_thread_ids
+        + sorted(stale_channel_ids)
         + [
             str(channel.get("id") or "")
             for channel, reason in skipped_parent_rows
             if reason
+        ]
+        + [
+            str(thread.get("id") or "")
+            for thread, reason in skipped_active_thread_rows
+            if reason
         ],
+        delete_channel_rows=True,
     )
-    record_etl_items_seen("discord", "channel", "active_thread", len(active_threads))
+    record_etl_items_seen(
+        "discord", "channel", "active_thread", len(active_thread_candidates)
+    )
     record_etl_items_upserted(
         "discord", "channel", "active_thread", len(active_threads)
     )
@@ -533,7 +737,8 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         mode="incremental",
         requested=[channel_ref(channel) for channel in message_containers],
         skipped=[
-            channel_ref(channel, reason) for channel, reason in skipped_parent_rows
+            _redacted_channel_ref(channel, reason)
+            for channel, reason in skipped_parent_rows
         ],
         metadata={
             **inp.metadata,
@@ -547,19 +752,25 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             "typical_category_min_count": typical_category_min_count,
             "syncable_parent_channels": len(syncable_parents),
             "active_threads": len(active_threads),
+            "skipped_active_threads": len(skipped_active_thread_rows),
             "purged_scope": purged_scope,
         },
     )
 
     synced: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = [
-        channel_ref(channel, reason) for channel, reason in skipped_parent_rows
+        _redacted_channel_ref(channel, reason)
+        for channel, reason in skipped_parent_rows
     ]
+    skipped.extend(
+        _redacted_channel_ref(thread, reason)
+        for thread, reason in skipped_active_thread_rows
+    )
     failed: list[dict[str, str]] = []
     counts = {
         "messages_fetched": 0,
         "messages_upserted": 0,
-        "threads_fetched": len(active_threads),
+        "threads_fetched": len(active_thread_candidates),
         "threads_upserted": len(active_threads),
     }
 
@@ -592,6 +803,8 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                 run_id=run_id,
                 limit=limit,
                 pages_per_channel=pages_per_channel,
+                excluded_ids=excluded_ids,
+                excluded_channel_patterns=excluded_channel_patterns,
             )
             counts["messages_fetched"] += fetched
             counts["messages_upserted"] += upserted
@@ -625,6 +838,39 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                 messages=fetched,
                 newest_message_id=newest_id,
                 backfill_seeded=bool(oldest_id),
+            )
+        except DiscordApiError as exc:
+            if exc.status_code in {403, 404}:
+                purged_scope = await purge_channels_from_sync_scope(
+                    ctx._pool,
+                    [channel_id],
+                    delete_channel_rows=True,
+                )
+                reason = f"discord_api_{exc.status_code}"
+                skipped.append(_redacted_channel_ref(channel, reason))
+                ctx.log(
+                    "discord_sync_channel_purged_inaccessible",
+                    channel_id=channel_id,
+                    reason=reason,
+                    purged_scope=purged_scope,
+                )
+                continue
+            error = str(exc)
+            ctx.log(
+                "discord_sync_channel_failed",
+                channel_id=channel_id,
+                channel_name=str(channel.get("name") or ""),
+                error=error,
+            )
+            failed.append(channel_ref(channel, error))
+            record_etl_items_failed(
+                "discord", "channel", "channel", failure_reason(error)
+            )
+            await update_checkpoint_failure(
+                ctx._pool,
+                channel_id=channel_id,
+                run_id=run_id,
+                error=error,
             )
         except Exception as exc:
             error = str(exc)

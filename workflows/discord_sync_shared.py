@@ -57,6 +57,8 @@ class DiscordSyncClient(Protocol):
 
     def list_active_threads(self, guild_id: str) -> list[dict[str, Any]]: ...
 
+    def get_channel(self, channel_id: str) -> dict[str, Any]: ...
+
     def list_public_archived_threads(
         self,
         channel_id: str,
@@ -204,6 +206,10 @@ class HttpDiscordSyncClient:
         data = self._request("GET", f"/guilds/{quote(guild_id)}/threads/active")
         threads = data.get("threads") if isinstance(data, dict) else []
         return threads if isinstance(threads, list) else []
+
+    def get_channel(self, channel_id: str) -> dict[str, Any]:
+        data = self._request("GET", f"/channels/{quote(channel_id)}")
+        return data if isinstance(data, dict) else {}
 
     def list_public_archived_threads(
         self,
@@ -412,6 +418,14 @@ def message_row(
     }
 
 
+def embedded_thread_id(message: dict[str, Any]) -> str:
+    """Return the embedded Discord thread id on a parent-channel starter message."""
+    thread_payload = (
+        message.get("thread") if isinstance(message.get("thread"), dict) else {}
+    )
+    return str(thread_payload.get("id") or "")
+
+
 async def upsert_channels(pool, rows: list[dict[str, Any]]) -> int:
     """Upsert Discord channels and threads discovered by the ETL."""
     if not rows:
@@ -516,6 +530,14 @@ async def upsert_messages(pool, rows: list[dict[str, Any]]) -> int:
                     "WHERE EXISTS ("
                     "    SELECT 1 FROM discord_sync_channels "
                     "    WHERE channel_id = $1 AND is_syncable = TRUE"
+                    ") AND ("
+                    "    $5::text IS NULL "
+                    "    OR $5::text = $1::text "
+                    "    OR EXISTS ("
+                    "        SELECT 1 FROM discord_sync_channels thread_channels "
+                    "        WHERE thread_channels.channel_id = $5::text "
+                    "          AND thread_channels.is_syncable = TRUE"
+                    "    )"
                     ") ON CONFLICT (channel_id, message_id) DO UPDATE SET "
                     "guild_id = EXCLUDED.guild_id, "
                     "parent_channel_id = EXCLUDED.parent_channel_id, "
@@ -650,6 +672,8 @@ def _status_row_count(status: str) -> int:
 async def purge_channels_from_sync_scope(
     pool,
     channel_ids: list[str],
+    *,
+    delete_channel_rows: bool = False,
 ) -> dict[str, int]:
     """Delete stored Discord content derived from channels that left sync scope."""
     scoped_ids = sorted(
@@ -668,12 +692,34 @@ async def purge_channels_from_sync_scope(
             descendant_thread_ids = [
                 str(row["channel_id"])
                 for row in await conn.fetch(
-                    "SELECT channel_id FROM discord_sync_channels "
-                    "WHERE parent_id = ANY($1::text[])",
+                    "WITH RECURSIVE descendants AS ("
+                    "    SELECT channel_id FROM discord_sync_channels "
+                    "    WHERE channel_id = ANY($1::text[]) "
+                    "  UNION "
+                    "    SELECT child.channel_id "
+                    "    FROM discord_sync_channels child "
+                    "    JOIN descendants parent "
+                    "      ON child.parent_id = parent.channel_id"
+                    ") "
+                    "SELECT channel_id FROM descendants "
+                    "WHERE channel_id <> ALL($1::text[])",
                     scoped_ids,
                 )
             ]
             affected_ids = sorted(set(scoped_ids + descendant_thread_ids))
+            affected_channel_day_source_ids = [
+                str(row["source_document_id"])
+                for row in await conn.fetch(
+                    "SELECT DISTINCT "
+                    "  channel_id || ':' || (occurred_at AT TIME ZONE 'UTC')::date AS source_document_id "
+                    "FROM discord_sync_messages "
+                    "WHERE (channel_id = ANY($1::text[]) "
+                    "   OR parent_channel_id = ANY($1::text[]) "
+                    "   OR thread_id = ANY($1::text[])) "
+                    "  AND occurred_at IS NOT NULL",
+                    affected_ids,
+                )
+            ]
             message_thread_ids = [
                 str(row["thread_id"])
                 for row in await conn.fetch(
@@ -686,20 +732,15 @@ async def purge_channels_from_sync_scope(
                 )
             ]
             affected_ids = sorted(set(affected_ids + message_thread_ids))
-            await conn.execute(
-                "UPDATE discord_sync_channels SET "
-                "is_syncable = FALSE, "
-                "exclusion_reason = COALESCE(NULLIF(exclusion_reason, ''), 'parent_excluded'), "
-                "updated_at = NOW() "
-                "WHERE channel_id = ANY($1::text[])",
-                affected_ids,
-            )
             deleted_docs = await conn.execute(
                 "DELETE FROM company_context_documents "
                 "WHERE source = 'discord' "
                 "  AND (metadata->>'channel_id' = ANY($1::text[]) "
-                "    OR metadata->>'thread_id' = ANY($1::text[]))",
+                "    OR metadata->>'thread_id' = ANY($1::text[]) "
+                "    OR (source_type = 'discord_channel_day' "
+                "        AND source_document_id = ANY($2::text[])))",
                 affected_ids,
+                affected_channel_day_source_ids,
             )
             deleted_messages = await conn.execute(
                 "DELETE FROM discord_sync_messages "
@@ -718,12 +759,75 @@ async def purge_channels_from_sync_scope(
                 "WHERE channel_id = ANY($1::text[])",
                 affected_ids,
             )
+            if delete_channel_rows:
+                await conn.execute(
+                    "DELETE FROM discord_sync_channels "
+                    "WHERE channel_id = ANY($1::text[])",
+                    affected_ids,
+                )
+            else:
+                await conn.execute(
+                    "UPDATE discord_sync_channels SET "
+                    "is_syncable = FALSE, "
+                    "exclusion_reason = COALESCE(NULLIF(exclusion_reason, ''), 'parent_excluded'), "
+                    "updated_at = NOW() "
+                    "WHERE channel_id = ANY($1::text[])",
+                    affected_ids,
+                )
     return {
         "channels": len(affected_ids),
         "documents_deleted": _status_row_count(deleted_docs),
         "messages_deleted": _status_row_count(deleted_messages),
         "backfill_jobs_deleted": _status_row_count(deleted_jobs),
         "checkpoints_deleted": _status_row_count(deleted_checkpoints),
+    }
+
+
+async def purge_invalid_thread_message_rows(pool) -> dict[str, int]:
+    """Delete legacy parent-channel messages linked to missing/unsyncable thread rows."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            invalid_rows = await conn.fetch(
+                "SELECT DISTINCT m.thread_id, "
+                "  m.channel_id || ':' || (m.occurred_at AT TIME ZONE 'UTC')::date AS source_document_id "
+                "FROM discord_sync_messages m "
+                "LEFT JOIN discord_sync_channels tc "
+                "  ON tc.channel_id = m.thread_id "
+                " AND tc.is_syncable = TRUE "
+                "WHERE m.thread_id IS NOT NULL "
+                "  AND tc.channel_id IS NULL",
+            )
+            affected_thread_ids = sorted(
+                {str(row["thread_id"]) for row in invalid_rows if row["thread_id"]}
+            )
+            affected_channel_day_source_ids = sorted(
+                {
+                    str(row["source_document_id"])
+                    for row in invalid_rows
+                    if row["source_document_id"]
+                }
+            )
+            deleted_docs = await conn.execute(
+                "DELETE FROM company_context_documents "
+                "WHERE source = 'discord' "
+                "  AND (metadata->>'thread_id' = ANY($1::text[]) "
+                "    OR (source_type = 'discord_channel_day' "
+                "        AND source_document_id = ANY($2::text[])))",
+                affected_thread_ids,
+                affected_channel_day_source_ids,
+            )
+            deleted_messages = await conn.execute(
+                "DELETE FROM discord_sync_messages m "
+                "WHERE m.thread_id IS NOT NULL "
+                "  AND NOT EXISTS ("
+                "      SELECT 1 FROM discord_sync_channels tc "
+                "      WHERE tc.channel_id = m.thread_id "
+                "        AND tc.is_syncable = TRUE"
+                "  )",
+            )
+    return {
+        "messages_deleted": _status_row_count(deleted_messages),
+        "documents_deleted": _status_row_count(deleted_docs),
     }
 
 

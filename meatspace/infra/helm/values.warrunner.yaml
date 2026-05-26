@@ -8,7 +8,8 @@ api:
   slackEtlEnabled: false
   discordEtlEnabled: true
   discordEtlPermissionMode: category_default
-  discordEtlExcludedCategoryPatterns: "*founder*,*founders*,*admin*,*private*,*sensitive*,*legal*,*finance*"
+  discordEtlExcludedChannelPatterns: "*founder*,*founders*,*admin*,*private*,*sensitive*,*legal*,*finance*,*bank*,*payroll*,*signatory*,*security*,*privacy*,*tos*"
+  discordEtlExcludedCategoryPatterns: "*founder*,*founders*,*admin*,*private*,*sensitive*,*legal*,*finance*,*bank*,*payroll*,*signatory*,*security*,*privacy*,*tos*"
   discordEtlTypicalCategoryMinCount: 2
   discordBackfillIntervalSeconds: 60
   discordBackfillChannelBatchLimit: 20
