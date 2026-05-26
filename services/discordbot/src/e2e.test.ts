@@ -48,6 +48,14 @@ const server = Bun.serve({
         guild_id: 'guild-1'
       })
     }
+    if (url.pathname === '/channels/random-thread' && request.method === 'GET') {
+      return Response.json({
+        id: 'random-thread',
+        type: 11,
+        parent_id: 'random-forum',
+        guild_id: 'guild-1'
+      })
+    }
     if (url.pathname === '/channels/thread-1/messages' && request.method === 'GET') {
       return Response.json([
         {
@@ -75,6 +83,18 @@ const server = Bun.serve({
           channel_id: 'home-1',
           guild_id: 'guild-1',
           content: 'home channel context',
+          author: { id: 'user-2' },
+          attachments: []
+        }
+      ])
+    }
+    if (url.pathname === '/channels/random-thread/messages' && request.method === 'GET') {
+      return Response.json([
+        {
+          id: 'random-hist-1',
+          channel_id: 'random-thread',
+          guild_id: 'guild-1',
+          content: 'random thread context',
           author: { id: 'user-2' },
           attachments: []
         }
@@ -128,6 +148,10 @@ const server = Bun.serve({
       return Response.json({ id: 'posted-home-1', channel_id: 'home-1' })
     }
     if (url.pathname === '/channels/home-1/typing' && request.method === 'POST') {
+      typingPosts.push({ path: url.pathname, body: {} })
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname === '/channels/random-thread/typing' && request.method === 'POST') {
       typingPosts.push({ path: url.pathname, body: {} })
       return new Response(null, { status: 204 })
     }
@@ -270,6 +294,49 @@ describe('discordbot local e2e', () => {
     expect(workflowRuns[0]?.body.input.metadata.is_mention).toBe(true)
     expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(1)
     await waitFor(() => typingPosts.some(post => post.path === '/channels/home-1/typing'))
+  })
+
+  it('accepts a bot mention in any Discord thread and keeps a separate workflow thread key', async () => {
+    const { app } = await import('./index')
+    const response = await app.request('/api/discord/events', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-api-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        id: 'random-msg-1',
+        channel_id: 'random-thread',
+        guild_id: 'guild-1',
+        content: '<@bot-user> work in this thread too',
+        author: { id: 'user-1' },
+        member: { roles: ['eng'] },
+        mentions: [{ id: 'bot-user' }],
+        attachments: []
+      })
+    })
+
+    expect(response.status).toBe(200)
+    await waitFor(() => workflowRuns.length === 1)
+    expect(workflowRuns[0]?.body).toMatchObject({
+      workflow_name: 'discord_thread_turn',
+      trigger_key: 'discord:guild-1:random-thread:random-msg-1',
+      input: {
+        thread_key: 'discord:guild-1:random-forum:random-thread',
+        message_id: 'discord:guild-1:random-thread:random-msg-1',
+        delivery: {
+          platform: 'discord',
+          guild_id: 'guild-1',
+          channel_id: 'random-thread',
+          thread_id: 'random-thread',
+          parent_channel_id: 'random-forum'
+        }
+      }
+    })
+    expect(workflowRuns[0]?.body.input.parts[0].text).toBe('work in this thread too')
+    expect(workflowRuns[0]?.body.input.metadata.is_mention).toBe(true)
+    expect(workflowRuns[0]?.body.input.history_messages).toHaveLength(1)
+    await waitFor(() => typingPosts.some(post => post.path === '/channels/random-thread/typing'))
   })
 
   it('claims a final delivery and posts back into the Discord thread', async () => {

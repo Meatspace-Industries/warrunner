@@ -81,6 +81,7 @@ function isAllowedRoute(
 ): boolean {
   const homeIds = homeChannelIds(config)
   const intakeIds = new Set(config.WARRUNNER_INTAKE_CHANNEL_IDS)
+  if (isMention) return true
   if (!homeIds.size && !intakeIds.size) return false
   if (parentChannelId && homeIds.has(parentChannelId)) return true
   if (homeIds.has(channelId)) {
@@ -125,9 +126,10 @@ export function normalizeDiscordText(input: string, config: AppConfig): string {
 function mentionsBot(message: DiscordMessage, config: AppConfig): boolean {
   const ids = botMentionIds(config)
   if (!ids.length) return false
+  if (message.mentions) return message.mentions.some(user => ids.includes(user.id))
   const content = message.content ?? ''
   if (ids.some(id => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`))) return true
-  return (message.mentions ?? []).some(user => ids.includes(user.id))
+  return false
 }
 
 function botMentionIds(config: AppConfig): string[] {

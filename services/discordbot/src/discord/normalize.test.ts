@@ -122,14 +122,49 @@ describe('normalizeDiscordMessage', () => {
     const config = loadConfig(env())
     expect(
       normalizeDiscordMessage({
-        message: message(),
+        message: message({ content: 'background channel chatter' }),
         config,
         parentChannelId: 'other-channel'
       })
     ).toBeNull()
   })
 
-  it('rejects all Discord messages when no route config exists', () => {
+  it('accepts bot-mentioned messages outside configured routes', () => {
+    const config = loadConfig(env())
+    const normalized = normalizeDiscordMessage({
+      message: message({
+        id: 'outside-msg-1',
+        channel_id: 'random-thread',
+        content: '<@999> can you work here too?',
+        mentions: [{ id: '999' }]
+      }),
+      config,
+      parentChannelId: 'random-forum'
+    })
+
+    expect(normalized?.thread_key).toBe('discord:guild-1:random-forum:random-thread')
+    expect(normalized?.message_id).toBe('discord:guild-1:random-thread:outside-msg-1')
+    expect(normalized?.parts[0]?.text).toBe('can you work here too?')
+    expect(normalized?.discord.is_mention).toBe(true)
+  })
+
+  it('rejects raw mention-looking text outside configured routes without a parsed Discord mention', () => {
+    const config = loadConfig(env())
+    expect(
+      normalizeDiscordMessage({
+        message: message({
+          id: 'outside-msg-2',
+          channel_id: 'random-thread',
+          content: '<@999> literal text, not a parsed Discord mention',
+          mentions: []
+        }),
+        config,
+        parentChannelId: 'random-forum'
+      })
+    ).toBeNull()
+  })
+
+  it('accepts bot-mentioned messages when no route config exists', () => {
     const config = loadConfig(
       env({
         WARRUNNER_HOME_FORUM_CHANNEL_ID: '',
@@ -140,11 +175,11 @@ describe('normalizeDiscordMessage', () => {
 
     expect(
       normalizeDiscordMessage({
-        message: message(),
+        message: message({ mentions: [{ id: '999' }] }),
         config,
         parentChannelId: 'forum-1'
-      })
-    ).toBeNull()
+      })?.thread_key
+    ).toBe('discord:guild-1:forum-1:thread-1')
   })
 
   it('enforces allowed role ids when configured', () => {
