@@ -1,5 +1,6 @@
-# Warrunner's default deployment shape: Discord forum threads are the primary
-# integration surface and Slack is disabled unless explicitly re-enabled.
+# Warrunner's default Meatspace deployment shape uses a mention-gated Discord
+# home channel. Forum-thread routing remains available when a real forum/media
+# channel is configured.
 
 api:
   executionWorkerEnabled: true
