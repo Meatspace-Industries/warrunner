@@ -1,3 +1,8 @@
+---
+name: warrunner-discord
+description: Use when a task arrives from a Warrunner Discord forum thread or home channel.
+---
+
 # Warrunner Discord Threads
 
 Use this skill when a task arrives from a Discord forum thread.

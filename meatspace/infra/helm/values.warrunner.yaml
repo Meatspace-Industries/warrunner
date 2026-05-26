@@ -2,11 +2,14 @@
 # integration surface and Slack is disabled unless explicitly re-enabled.
 
 api:
+  executionWorkerEnabled: true
   workflowWorkerEnabled: true
   slackEtlEnabled: false
   extraEnv:
     CENTAUR_DEPLOYMENT_NAME: warrunner
     CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY
+    # Cold GKE nodes can take longer than Centaur's 60s default to pull the agent image.
+    KUBERNETES_SANDBOX_READY_TIMEOUT_S: "300"
 
 slackbot:
   enabled: false
