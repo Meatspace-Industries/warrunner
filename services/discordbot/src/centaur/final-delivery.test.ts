@@ -223,6 +223,111 @@ describe('pollFinalDeliveriesOnce', () => {
     expect(delivered[0]?.body.consumer_id).toStartWith('discordbot-')
   })
 
+  it('rewrites configured user aliases into safe Discord mentions', async () => {
+    const posts: Array<{ channelId: string; body: any }> = []
+    globalThis.fetch = (async input => {
+      const url = new URL(String(input))
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return Response.json({
+          deliveries: [
+            {
+              execution_id: 'exec-mention',
+              thread_key: 'discord:guild-1:forum-1:thread-1',
+              delivery: { platform: 'discord', guild_id: 'guild-1', thread_id: 'thread-1' },
+              final_payload: {
+                result_text: '@Meepo please check this. @unknown should stay literal.'
+              }
+            }
+          ]
+        })
+      }
+      if (url.pathname === '/agent/final-deliveries/exec-mention/delivered') {
+        return Response.json({ ok: true })
+      }
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }) as typeof fetch
+
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      PORT: '3002',
+      ENVIRONMENT: 'test',
+      COMMIT_SHA: 'test',
+      CENTAUR_API_URL: 'http://centaur.test',
+      DISCORDBOT_API_KEY: 'centaur-key',
+      WARRUNNER_MENTION_USER_ALIASES: 'meepo=1500785594068897792'
+    } as NodeJS.ProcessEnv)
+    const client = {
+      createMessage: async (channelId: string, body: any) => {
+        posts.push({ channelId, body })
+        return { id: `posted-${posts.length}`, channel_id: channelId, content: body.content }
+      }
+    } as any
+
+    await pollFinalDeliveriesOnce(config, client)
+
+    expect(posts).toEqual([
+      {
+        channelId: 'thread-1',
+        body: {
+          content: '<@1500785594068897792> please check this. @unknown should stay literal.',
+          allowed_mentions: { parse: [], users: ['1500785594068897792'] }
+        }
+      }
+    ])
+  })
+
+  it('does not enable arbitrary raw user pings without payload or alias allowlisting', async () => {
+    const posts: Array<{ channelId: string; body: any }> = []
+    globalThis.fetch = (async input => {
+      const url = new URL(String(input))
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return Response.json({
+          deliveries: [
+            {
+              execution_id: 'exec-raw-mention',
+              thread_key: 'discord:guild-1:forum-1:thread-1',
+              delivery: { platform: 'discord', guild_id: 'guild-1', thread_id: 'thread-1' },
+              final_payload: {
+                result_text: '<@123456789012345678> stays visible but should not notify'
+              }
+            }
+          ]
+        })
+      }
+      if (url.pathname === '/agent/final-deliveries/exec-raw-mention/delivered') {
+        return Response.json({ ok: true })
+      }
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }) as typeof fetch
+
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      PORT: '3002',
+      ENVIRONMENT: 'test',
+      COMMIT_SHA: 'test',
+      CENTAUR_API_URL: 'http://centaur.test',
+      DISCORDBOT_API_KEY: 'centaur-key'
+    } as NodeJS.ProcessEnv)
+    const client = {
+      createMessage: async (channelId: string, body: any) => {
+        posts.push({ channelId, body })
+        return { id: `posted-${posts.length}`, channel_id: channelId, content: body.content }
+      }
+    } as any
+
+    await pollFinalDeliveriesOnce(config, client)
+
+    expect(posts).toEqual([
+      {
+        channelId: 'thread-1',
+        body: {
+          content: '<@123456789012345678> stays visible but should not notify',
+          allowed_mentions: { parse: [] }
+        }
+      }
+    ])
+  })
+
   it('returns failed delivery target metadata for Discord post failures', async () => {
     const failed: Array<{ path: string; body: any }> = []
     globalThis.fetch = (async (input, init) => {

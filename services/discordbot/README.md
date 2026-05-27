@@ -240,6 +240,11 @@ lookup.
 Set `WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED=false` only if the home channel is
 dedicated to Warrunner and every message there should start a turn.
 
+Set `WARRUNNER_MENTION_USER_ALIASES` to comma-separated `alias=user_id` entries
+when Warrunner should turn final-answer text like `@Meepo` into an actual
+Discord user mention. Discord `allowed_mentions.parse` remains empty; only
+configured aliases and explicit workflow payload IDs can notify users.
+
 For a remote deployment, set the same values through Helm using
 `meatspace/infra/helm/values.warrunner.yaml` and the `centaur-infra-env` Secret.
 The `Publish Warrunner Images` workflow publishes the `warrunner-discordbot`

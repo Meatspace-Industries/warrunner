@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { loadConfig } from './config'
+import { loadConfig, mentionUserAliases } from './config'
 
 describe('loadConfig', () => {
   it('accepts existing Meatspace Discord environment aliases', () => {
@@ -35,5 +35,17 @@ describe('loadConfig', () => {
     expect(config.WARRUNNER_HOME_FORUM_CHANNEL_ID).toBe('forum-primary')
     expect(config.WARRUNNER_HOME_CHANNEL_IDS).toEqual(['home-primary'])
     expect(config.WARRUNNER_ALLOWED_ROLE_IDS).toEqual(['role-primary'])
+  })
+
+  it('parses configured user mention aliases', () => {
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      WARRUNNER_MENTION_USER_ALIASES: '@Meepo=1500785594068897792,warrunner:1508581976779657369,invalid'
+    } as unknown as NodeJS.ProcessEnv)
+
+    expect([...mentionUserAliases(config)]).toEqual([
+      ['meepo', '1500785594068897792'],
+      ['warrunner', '1508581976779657369']
+    ])
   })
 })

@@ -1,4 +1,4 @@
-import { centaurApiKey, type AppConfig } from '../config'
+import { centaurApiKey, mentionUserAliases, normalizeMentionAlias, type AppConfig } from '../config'
 import { DiscordApiError, DiscordClient } from '../discord/client'
 import type { DiscordTypingIndicator } from '../discord/typing'
 import type {
@@ -11,6 +11,9 @@ import { logError } from '../logging'
 
 const CONSUMER_ID = `discordbot-${process.pid}`
 const FINAL_DELIVERY_CHUNK_CHARS = 1900
+const DISCORD_USER_ID_RE = /^\d{1,32}$/
+const DISCORD_USER_MENTION_RE = /<@!?(\d{1,32})>/g
+const ALIAS_MENTION_RE = /(^|[^\w<])@([A-Za-z][A-Za-z0-9_.-]{0,63})\b/g
 const NON_RETRYABLE_DISCORD_ERRORS = new Set([
   'missing_discord_delivery_target',
   'discord_forbidden',
@@ -79,7 +82,7 @@ export async function pollFinalDeliveriesOnce(
     const executionId = String(delivery.execution_id)
     const target = targetFromDelivery(delivery)
     try {
-      const messages = await deliver(client, delivery, target)
+      const messages = await deliver(config, client, delivery, target)
       await centaur(
         config,
         `/agent/final-deliveries/${encodeURIComponent(executionId)}/delivered`,
@@ -126,6 +129,7 @@ type DiscordDeliveryTarget = {
 }
 
 async function deliver(
+  config: AppConfig,
   client: DiscordClient,
   delivery: any,
   target: DiscordDeliveryTarget = targetFromDelivery(delivery)
@@ -136,9 +140,10 @@ async function deliver(
   const chunks = splitFinalDeliveryText(text)
   const messages: DiscordMessage[] = []
   for (const [index, chunk] of chunks.entries()) {
+    const prepared = prepareDiscordMessage(chunk, payload, config)
     const body: DiscordCreateMessageBody = {
-      content: chunk,
-      allowed_mentions: allowedMentionsFromPayload(payload)
+      content: prepared.content,
+      allowed_mentions: prepared.allowedMentions
     }
     const reference = index === 0 ? messageReferenceFromTarget(target) : undefined
     if (reference) body.message_reference = reference
@@ -214,12 +219,45 @@ function extractText(payload: any): string {
   return `Execution completed, but no final text was captured.${suffix}`
 }
 
-function allowedMentionsFromPayload(payload: any): DiscordAllowedMentions {
-  const users = uniqueStrings(allowedMentionUserIds(payload))
+function prepareDiscordMessage(
+  content: string,
+  payload: any,
+  config: AppConfig
+): { content: string; allowedMentions: DiscordAllowedMentions } {
+  const payloadAllowedUsers = sanitizedAllowedMentionUserIds(payload)
+  const allowedUsers = new Set(payloadAllowedUsers)
+  const aliases = mentionUserAliases(config)
+  const aliasUserIds = new Set(aliases.values())
+
+  const rewritten = content.replace(ALIAS_MENTION_RE, (full, prefix: string, alias: string) => {
+    const userId = aliases.get(normalizeMentionAlias(alias))
+    if (!userId) return full
+    allowedUsers.add(userId)
+    return `${prefix}<@${userId}>`
+  })
+
+  for (const userId of rawMentionUserIds(rewritten)) {
+    if (allowedUsers.has(userId) || aliasUserIds.has(userId)) {
+      allowedUsers.add(userId)
+    }
+  }
+
+  return {
+    content: rewritten,
+    allowedMentions: allowedMentionsFromUserIds([...allowedUsers])
+  }
+}
+
+function allowedMentionsFromUserIds(userIds: unknown[]): DiscordAllowedMentions {
+  const users = uniqueStrings(userIds)
     .map(userId => userId.trim())
-    .filter(userId => /^\d{1,32}$/.test(userId))
+    .filter(userId => DISCORD_USER_ID_RE.test(userId))
     .slice(0, 100)
   return users.length > 0 ? { parse: [], users } : { parse: [] }
+}
+
+function sanitizedAllowedMentionUserIds(payload: any): string[] {
+  return allowedMentionsFromUserIds(allowedMentionUserIds(payload)).users ?? []
 }
 
 function allowedMentionUserIds(payload: any): unknown[] {
@@ -230,6 +268,10 @@ function allowedMentionUserIds(payload: any): unknown[] {
     return payload.allowed_mentions.users
   }
   return []
+}
+
+function rawMentionUserIds(content: string): string[] {
+  return [...content.matchAll(DISCORD_USER_MENTION_RE)].flatMap(match => (match[1] ? [match[1]] : []))
 }
 
 function uniqueStrings(values: unknown[]): string[] {
