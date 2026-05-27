@@ -2273,7 +2273,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                 ") "
                 "ORDER BY er.created_at ASC "
                 "LIMIT 32 "
-                "FOR UPDATE SKIP LOCKED"
+                "FOR UPDATE OF er SKIP LOCKED"
             )
             # Count how many workflow-linked executions are currently running
             # to enforce the slot reservation for user-facing requests.
