@@ -1636,6 +1636,79 @@ async def test_notify_execution_terminal_wakes_run(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_release_assignment_wakes_workflow_waiting_on_released_execution(db_pool):
+    from api.runtime_control import release_assignment
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"discord:guild:channel:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, 'rt-release-test', 'codex', 'codex', NULL, "
+        "'harness:codex', 'sha', 'active')",
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "thread_key, status, input_json, available_at"
+        ") VALUES ($1, 'discord_thread_turn', 'test-discord-thread-turn-v1', "
+        "'hash', $1, $2, 'waiting', $3::jsonb, '2099-01-01T00:00:00Z')",
+        run_id,
+        thread_key,
+        json.dumps({"thread_key": thread_key}),
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_checkpoints ("
+        "run_id, checkpoint_name, step_kind, state, execution_id"
+        ") VALUES ($1, 'agent_turn', 'agent_turn', $2::jsonb, $3)",
+        run_id,
+        json.dumps({"execution_id": execution_id, "status": "waiting"}),
+        execution_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, "
+        "request_hash, status, delivery, metadata"
+        ") VALUES ($1, $2, 1, 'exec-release-test', 'hash', 'running', "
+        "'{}'::jsonb, '{}'::jsonb)",
+        execution_id,
+        thread_key,
+    )
+
+    response = await release_assignment(
+        db_pool,
+        thread_key=thread_key,
+        release_id=f"release-{uuid.uuid4().hex}",
+        cancel_inflight=True,
+        stop_runtime=False,
+    )
+
+    assert response["released"] is True
+    execution_row = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, worker_id, worker_lease_expires_at "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution_row is not None
+    assert execution_row["status"] == "cancelled"
+    assert execution_row["terminal_reason"] == "released"
+    assert execution_row["worker_id"] is None
+    assert execution_row["worker_lease_expires_at"] is None
+
+    run_row = await db_pool.fetchrow(
+        "SELECT status, available_at FROM workflow_runs WHERE run_id = $1",
+        run_id,
+    )
+    assert run_row is not None
+    assert run_row["status"] == "waiting"
+    assert run_row["available_at"] <= dt.datetime.now(dt.timezone.utc)
+
+
+@pytest.mark.asyncio
 async def test_cancel_workflow_run_cancels_linked_execution(db_pool):
     from api.workflow_engine import cancel_workflow_run
 
