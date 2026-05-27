@@ -1,7 +1,12 @@
 import { centaurApiKey, type AppConfig } from '../config'
 import { DiscordApiError, DiscordClient } from '../discord/client'
 import type { DiscordTypingIndicator } from '../discord/typing'
-import type { DiscordCreateMessageBody, DiscordMessage, DiscordMessageReference } from '../discord/types'
+import type {
+  DiscordAllowedMentions,
+  DiscordCreateMessageBody,
+  DiscordMessage,
+  DiscordMessageReference
+} from '../discord/types'
 import { logError } from '../logging'
 
 const CONSUMER_ID = `discordbot-${process.pid}`
@@ -126,13 +131,14 @@ async function deliver(
   target: DiscordDeliveryTarget = targetFromDelivery(delivery)
 ): Promise<DiscordMessage[]> {
   if (!target.channelId) throw new Error('missing_discord_delivery_target')
-  const text = extractText(delivery.final_payload ?? {})
+  const payload = delivery.final_payload ?? {}
+  const text = extractText(payload)
   const chunks = splitFinalDeliveryText(text)
   const messages: DiscordMessage[] = []
   for (const [index, chunk] of chunks.entries()) {
     const body: DiscordCreateMessageBody = {
       content: chunk,
-      allowed_mentions: { parse: [] }
+      allowed_mentions: allowedMentionsFromPayload(payload)
     }
     const reference = index === 0 ? messageReferenceFromTarget(target) : undefined
     if (reference) body.message_reference = reference
@@ -206,6 +212,36 @@ function extractText(payload: any): string {
   const executionId = String(payload?.execution_id ?? '').trim()
   const suffix = executionId ? ` Execution: ${executionId}.` : ''
   return `Execution completed, but no final text was captured.${suffix}`
+}
+
+function allowedMentionsFromPayload(payload: any): DiscordAllowedMentions {
+  const users = uniqueStrings(allowedMentionUserIds(payload))
+    .map(userId => userId.trim())
+    .filter(userId => /^\d{1,32}$/.test(userId))
+    .slice(0, 100)
+  return users.length > 0 ? { parse: [], users } : { parse: [] }
+}
+
+function allowedMentionUserIds(payload: any): unknown[] {
+  if (Array.isArray(payload?.allowed_mention_user_ids)) {
+    return payload.allowed_mention_user_ids
+  }
+  if (Array.isArray(payload?.allowed_mentions?.users)) {
+    return payload.allowed_mentions.users
+  }
+  return []
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const text = cleanString(value)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    result.push(text)
+  }
+  return result
 }
 
 function firstNonEmpty(...values: unknown[]): string {

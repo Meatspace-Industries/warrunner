@@ -150,6 +150,79 @@ describe('pollFinalDeliveriesOnce', () => {
     ])
   })
 
+  it('marks workflow reminder deliveries with encoded execution ids', async () => {
+    const posts: Array<{ channelId: string; body: any }> = []
+    const delivered: Array<{ path: string; body: any }> = []
+    const executionId = 'workflow:wfr_123:discord-reminder'
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return Response.json({
+          deliveries: [
+            {
+              execution_id: executionId,
+              thread_key: 'discord:guild-1:forum-1:thread-1',
+              delivery: {
+                platform: 'discord',
+                guild_id: 'guild-1',
+                thread_id: 'thread-1',
+                message_id: 'discord:guild-1:thread-1:source-msg-1'
+              },
+              final_payload: {
+                result_text: '<@123456789012345678> Reminder: check deploy',
+                allowed_mention_user_ids: ['123456789012345678', 'not-a-user-id', '123456789012345678']
+              }
+            }
+          ]
+        })
+      }
+      if (url.pathname === `/agent/final-deliveries/${encodeURIComponent(executionId)}/delivered`) {
+        delivered.push({
+          path: url.pathname,
+          body: JSON.parse(String(init?.body ?? '{}'))
+        })
+        return Response.json({ ok: true })
+      }
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }) as typeof fetch
+
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      PORT: '3002',
+      ENVIRONMENT: 'test',
+      COMMIT_SHA: 'test',
+      CENTAUR_API_URL: 'http://centaur.test',
+      DISCORDBOT_API_KEY: 'centaur-key'
+    } as NodeJS.ProcessEnv)
+    const client = {
+      createMessage: async (channelId: string, body: any) => {
+        posts.push({ channelId, body })
+        return { id: `posted-${posts.length}`, channel_id: channelId, content: body.content }
+      }
+    } as any
+
+    const result = await pollFinalDeliveriesOnce(config, client)
+
+    expect(result.delivered).toHaveLength(1)
+    expect(posts).toEqual([
+      {
+        channelId: 'thread-1',
+        body: {
+          content: '<@123456789012345678> Reminder: check deploy',
+          allowed_mentions: { parse: [], users: ['123456789012345678'] },
+          message_reference: {
+            message_id: 'source-msg-1',
+            channel_id: 'thread-1',
+            guild_id: 'guild-1',
+            fail_if_not_exists: false
+          }
+        }
+      }
+    ])
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]?.body.consumer_id).toStartWith('discordbot-')
+  })
+
   it('returns failed delivery target metadata for Discord post failures', async () => {
     const failed: Array<{ path: string; body: any }> = []
     globalThis.fetch = (async (input, init) => {

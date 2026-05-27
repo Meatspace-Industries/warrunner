@@ -815,6 +815,62 @@ class WorkflowContext:
         step_name = f"post_slack_{channel}"
         return await self.step(step_name, _post, step_kind="slack_post")
 
+    async def enqueue_final_delivery(
+        self,
+        name: str,
+        *,
+        thread_key: str,
+        delivery: dict[str, Any],
+        final_payload: dict[str, Any],
+        delivery_id: str | None = None,
+        next_attempt_at: dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        """Queue a checkpointed final-delivery outbox item for external delivery.
+
+        The outbox is intentionally transport-owned: Slackbot/Discordbot hold
+        the platform credentials, while workflows can persist delivery intent.
+        """
+        checkpoint_name = self._peek_resolved_name(name)
+        execution_id = delivery_id or f"workflow:{self.run_id}:{checkpoint_name}"
+        scheduled_at = next_attempt_at or dt.datetime.now(dt.timezone.utc)
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=dt.timezone.utc)
+
+        async def _enqueue() -> dict[str, Any]:
+            await self._pool.execute(
+                "INSERT INTO agent_final_delivery_outbox ("
+                "execution_id, thread_key, delivery, state, final_payload, "
+                "next_attempt_at"
+                ") VALUES ($1, $2, $3::jsonb, 'pending', $4::jsonb, $5) "
+                "ON CONFLICT (execution_id) DO NOTHING",
+                execution_id,
+                thread_key,
+                canonical_json(delivery),
+                canonical_json(final_payload),
+                scheduled_at,
+            )
+            row = await self._pool.fetchrow(
+                "SELECT execution_id, thread_key, state, next_attempt_at "
+                "FROM agent_final_delivery_outbox WHERE execution_id = $1",
+                execution_id,
+            )
+            return {
+                "execution_id": execution_id,
+                "thread_key": row["thread_key"] if row else thread_key,
+                "state": row["state"] if row else "pending",
+                "next_attempt_at": (
+                    row["next_attempt_at"].isoformat()
+                    if row and row["next_attempt_at"]
+                    else scheduled_at.isoformat()
+                ),
+            }
+
+        return await self.step(
+            name,
+            _enqueue,
+            step_kind="final_delivery_enqueue",
+        )
+
     @property
     def tools(self) -> _ToolProxy:
         """Dynamic tool proxy for ergonomic checkpointed tool calls.
