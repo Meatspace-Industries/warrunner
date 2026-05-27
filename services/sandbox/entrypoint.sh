@@ -77,6 +77,56 @@ else
     exit 1
 fi
 
+CODEX_AUTH_JSON="${CENTAUR_CODEX_AUTH_JSON:-}"
+CODEX_COMMAND_NAME="$(basename "${1:-}")"
+CODEX_HARNESS_SELECTED=0
+case "$CODEX_COMMAND_NAME" in
+    codex-app-wrapper|codex-wrapper)
+        CODEX_HARNESS_SELECTED=1
+        ;;
+esac
+if [ -n "$CODEX_AUTH_JSON" ]; then
+    if [ ! -r "$CODEX_AUTH_JSON" ]; then
+        echo "configured Codex auth JSON is not readable: $CODEX_AUTH_JSON" >&2
+        exit 1
+    fi
+    python3 - "$CODEX_AUTH_JSON" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+
+if data.get("auth_mode") != "chatgpt":
+    raise SystemExit("configured Codex auth JSON must have auth_mode=chatgpt")
+
+tokens = data.get("tokens")
+if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
+    raise SystemExit("configured Codex auth JSON is missing tokens.refresh_token")
+
+if data.get("OPENAI_API_KEY"):
+    raise SystemExit("configured Codex auth JSON must not contain OPENAI_API_KEY")
+PYEOF
+    cp "$CODEX_AUTH_JSON" "$HOME_DIR/.codex/auth.json"
+    chmod 600 "$HOME_DIR/.codex/auth.json" 2>/dev/null || true
+fi
+
+if [ "$CODEX_HARNESS_SELECTED" = "1" ]; then
+    if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ]; then
+        echo "fatal: codex_api_key_login_disabled; use mounted ChatGPT auth JSON via CENTAUR_CODEX_AUTH_JSON" >&2
+        exit 1
+    fi
+    if [ -z "$CODEX_AUTH_JSON" ]; then
+        echo "fatal: codex_chatgpt_auth_required; CENTAUR_CODEX_AUTH_JSON must point at mounted ChatGPT auth JSON" >&2
+        exit 1
+    fi
+    if [ ! -f "$HOME_DIR/.codex/auth.json" ]; then
+        echo "fatal: codex_chatgpt_auth_install_failed; expected $HOME_DIR/.codex/auth.json before readiness" >&2
+        exit 1
+    fi
+fi
+
 codex_laminar_trace_endpoint="${CODEX_OTEL_LAMINAR_ENDPOINT:-}"
 if [ -z "$codex_laminar_trace_endpoint" ]; then
     codex_laminar_base="${CODEX_OTEL_LAMINAR_BASE_URL:-${LMNR_BASE_URL:-}}"
@@ -121,20 +171,34 @@ cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF
 }
 EOF
 
+# ── GitHub auth placeholder for proxy-side secret rewriting ─────────────────
+configure_github_git_credentials() {
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        git config --global --unset-all credential.helper 2>/dev/null || true
+        git config --global http.https://github.com/.extraheader \
+            "Authorization: Basic GITHUB_BASIC_AUTH"
+    fi
+}
+
+configure_github_git_credentials
+
 # ── Per-session workspace clone (no shared worktree metadata) ────────────────
 WORKSPACE_DIR="$HOME_DIR/workspace"
 if [ -n "${AGENT_REPO:-}" ]; then
     REPO_PATH="$HOME_DIR/github/$AGENT_REPO"
-    if ! git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
-        echo "AGENT_REPO is not a valid git repository: $REPO_PATH" >&2
-        exit 1
-    fi
-
     rm -rf "$WORKSPACE_DIR"
-    if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
-        echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
-        rm -rf "$WORKSPACE_DIR"
-        git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+    if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+        if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
+            echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
+            rm -rf "$WORKSPACE_DIR"
+            git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+        fi
+    else
+        REPO_URL="https://github.com/$AGENT_REPO.git"
+        if ! git clone --quiet "$REPO_URL" "$WORKSPACE_DIR"; then
+            echo "failed to clone AGENT_REPO from GitHub: $AGENT_REPO" >&2
+            exit 1
+        fi
     fi
 
     BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
@@ -197,23 +261,13 @@ if [ -x "$HARNESS_ADAPTER" ]; then
     "$HARNESS_ADAPTER" "${1:-}" "$TARGET_PROMPT"
 fi
 
-# Codex reads its auth file when the app server starts. Complete this before
-# signaling readiness, otherwise warm pods can be claimed with no auth loaded.
-CODEX_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
-if [ -n "$CODEX_KEY" ]; then
-    echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
-fi
-
 # Signal readiness
 touch "$HOME_DIR/.ready"
 
 # ── Background: slow auth tasks ─────────────────────────────────────────────
 {
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        git config --global credential.helper store
-        printf 'https://oauth2:%s@github.com\n' "$GITHUB_TOKEN" > "$HOME_DIR/.git-credentials"
         echo "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
-        gh auth setup-git 2>/dev/null || true
     fi
 } &
 

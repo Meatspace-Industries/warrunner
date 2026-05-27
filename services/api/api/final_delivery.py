@@ -16,6 +16,10 @@ NON_RETRYABLE_ERROR_CLASSES = frozenset(
         "is_archived",
         "restricted_action",
         "not_in_channel",
+        "missing_discord_delivery_target",
+        "discord_bad_request",
+        "discord_forbidden",
+        "discord_not_found",
     }
 )
 

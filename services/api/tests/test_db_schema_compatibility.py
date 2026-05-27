@@ -31,6 +31,12 @@ async def test_schema_compatibility_ok() -> None:
                 {"column_name": "inflight_attempts"},
                 {"column_name": "last_result"},
                 {"column_name": "last_result_at"},
+                {"column_name": "trace_id"},
+                {"column_name": "repo"},
+                {"column_name": "github_token_expires_at"},
+            ],
+            [
+                {"column_name": "repo"},
             ],
             [
                 {"version": "005"},
@@ -40,7 +46,9 @@ async def test_schema_compatibility_ok() -> None:
                 {"version": "009"},
                 {"version": "010"},
                 {"version": "011"},
-                {"version": "016"},
+                {"version": "035"},
+                {"version": "038"},
+                {"version": "039"},
             ],
         ]
     )
@@ -80,10 +88,15 @@ async def test_schema_compatibility_detects_missing_state_column_and_migration()
                 {"column_name": "inflight_attempts"},
                 {"column_name": "last_result"},
                 # last_result_at intentionally missing
+                # repo intentionally missing
+                # github_token_expires_at intentionally missing
+            ],
+            [
+                # agent_runtime_assignments.repo intentionally missing
             ],
             [
                 {"version": "005"},
-                # 006/007/008/009/010/011/016 intentionally missing
+                # 006/007/008/009/010/011/035/038/039 intentionally missing
             ],
         ]
     )
@@ -93,13 +106,18 @@ async def test_schema_compatibility_detects_missing_state_column_and_migration()
     assert report["compatible"] is False
     assert "suspended" in report["required_states_missing"]
     assert "last_result_at" in report["required_columns_missing"]
+    assert "repo" in report["required_columns_missing"]
+    assert "github_token_expires_at" in report["required_columns_missing"]
+    assert "agent_runtime_assignments.repo" in report["required_columns_missing"]
     assert "006" in report["required_migrations_missing"]
     assert "007" in report["required_migrations_missing"]
     assert "008" in report["required_migrations_missing"]
     assert "009" in report["required_migrations_missing"]
     assert "010" in report["required_migrations_missing"]
     assert "011" in report["required_migrations_missing"]
-    assert "016" in report["required_migrations_missing"]
+    assert "035" in report["required_migrations_missing"]
+    assert "038" in report["required_migrations_missing"]
+    assert "039" in report["required_migrations_missing"]
 
 
 @pytest.mark.asyncio

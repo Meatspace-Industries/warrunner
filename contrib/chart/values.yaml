@@ -64,6 +64,22 @@ api:
   slackSyncThreadLookbackDays: 3
   companyContextDocumentsIntervalSeconds: 14400
   slackEtlExcludedChannelPatterns: ""
+  discordEtlEnabled: false
+  discordGuildId: ""
+  discordSyncIntervalSeconds: 3600
+  discordBackfillIntervalSeconds: 60
+  discordBackfillChannelBatchLimit: 20
+  discordBackfillPagesPerJob: 5
+  discordSyncRecentLimit: 100
+  discordSyncPagesPerChannel: 2
+  discordContextDocumentsIntervalSeconds: 14400
+  discordEtlPermissionMode: category_default
+  discordEtlExcludedChannelIds: ""
+  discordEtlExcludedChannelPatterns: ""
+  discordEtlExcludedCategoryPatterns: ""
+  discordEtlAllowedCategoryIds: ""
+  discordEtlAllowedCategoryPatterns: ""
+  discordEtlTypicalCategoryMinCount: 2
   victoriaMetricsPushEnabled: false
   startupProbe:
     failureThreshold: 30
@@ -100,6 +116,9 @@ sandbox:
     repository: centaur-agent
     tag: latest
     pullPolicy: Always
+  codexAuth:
+    existingSecretName: ""
+    secretKey: auth.json
   runtimeClassName: ""
   reposPath: ""
   extraEnv: {}
@@ -140,6 +159,30 @@ slackbot:
   extraEnv: {}
   resources: {}
 
+discordbot:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: centaur-discordbot
+    tag: latest
+    pullPolicy: Always
+  applicationId: ""
+  botUserId: ""
+  guildId: ""
+  homeForumChannelId: ""
+  homeChannelIds: ""
+  intakeChannelIds: ""
+  allowedRoleIds: ""
+  historyLimit: 40
+  requireHomeThread: true
+  homeChannelMentionRequired: true
+  typingEnabled: true
+  typingRefreshMs: 8000
+  typingTimeoutMs: 600000
+  gatewayEnabled: true
+  extraEnv: {}
+  resources: {}
+
 postgres:
   enabled: true
   image:
@@ -149,6 +192,7 @@ postgres:
   args:
     - "-c"
     - "shared_preload_libraries=pg_search,pg_cron"
+  dataDir: /var/lib/postgresql/data/pgdata
   auth:
     database: ai_v2
     username: tempo
@@ -260,6 +304,7 @@ runnerAccess:
 
 networkPolicy:
   enabled: true
+  dnsIpBlocks: []
   ingressSourceNamespaces: []
   apiIngressSourceNamespaces: []
   ingressControllerNamespaces:

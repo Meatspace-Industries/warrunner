@@ -92,7 +92,7 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
-          push: true
+          push: ${{ github.event_name != 'pull_request' && github.repository_owner == 'paradigmxyz' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}

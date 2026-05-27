@@ -45,7 +45,7 @@ async def test_stream_empty_yields_nothing():
 
     async def mock_stream():
         return
-        yield  # noqa: unreachable — makes this an async generator
+        yield  # makes this an async generator
 
     result = await _collect(mock_stream())
     assert result == []

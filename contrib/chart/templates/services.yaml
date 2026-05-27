@@ -44,6 +44,22 @@ spec:
       targetPort: 3001
 ---
 {{- end }}
+{{ if .Values.discordbot.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "discordbot") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "discordbot") | nindent 4 }}
+spec:
+  selector:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "discordbot") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+---
+{{ end }}
 {{- if .Values.runnerAccess.enabled }}
 apiVersion: v1
 kind: Service

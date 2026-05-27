@@ -46,6 +46,8 @@ class SandboxSession:
     inflight_attempts: int = 0
     last_result: str = ""
     trace_id: str = ""
+    repo: str = ""
+    github_token_expires_at: float = 0.0
 
 
 class SandboxBackend(abc.ABC):

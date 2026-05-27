@@ -39,6 +39,7 @@ build-one service:
       api) just _build-api ;;
       iron-proxy) just _build-iron-proxy ;;
       slackbot) just _build-slackbot ;;
+      discordbot) just _build-discordbot ;;
       agent|sandbox) just _build-agent ;;
       *) echo "unknown service: {{service}}" >&2; exit 2 ;;
     esac
@@ -52,8 +53,17 @@ _build-iron-proxy:
 _build-slackbot:
     docker build -t centaur-slackbot:latest -f services/slackbot/Dockerfile .
 
+_build-discordbot:
+    docker build -t warrunner-discordbot:latest -f services/discordbot/Dockerfile .
+
 _build-agent:
     docker build --target sandbox -t centaur-agent:latest -f services/sandbox/Dockerfile .
+
+warrunner-dogfood-gates *args:
+    meatspace/scripts/warrunner-dogfood-gates.sh {{args}}
+
+warrunner-live-dogfood *args:
+    meatspace/scripts/warrunner-live-dogfood.sh {{args}}
 
 bootstrap-secrets *args:
     contrib/scripts/bootstrap-k8s-secrets.sh --namespace {{namespace}} {{args}}

@@ -1,5 +1,13 @@
 {{- $reposPath := .Values.sandbox.reposPath -}}
 {{- $apiExtraEnv := .Values.api.extraEnv | default dict -}}
+{{- $discordbotExtraEnv := .Values.discordbot.extraEnv | default dict -}}
+{{- $controlPlaneNoProxyHosts := printf "localhost,127.0.0.1,%s,%s" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) -}}
+{{- if .Values.slackbot.enabled -}}
+{{- $controlPlaneNoProxyHosts = printf "%s,%s" $controlPlaneNoProxyHosts (include "centaur.componentName" (dict "root" . "component" "slackbot")) -}}
+{{- end -}}
+{{- if .Values.discordbot.enabled -}}
+{{- $controlPlaneNoProxyHosts = printf "%s,%s" $controlPlaneNoProxyHosts (include "centaur.componentName" (dict "root" . "component" "discordbot")) -}}
+{{- end -}}
 {{- if and .Values.repoCache.enabled (not $reposPath) -}}
 {{- $reposPath = .Values.repoCache.hostPath -}}
 {{- end -}}
@@ -37,6 +45,8 @@ spec:
 {{ toYaml . | nindent 12 }}
 {{- end }}
           env:
+            - name: PGDATA
+              value: {{ .Values.postgres.dataDir | quote }}
             - name: POSTGRES_DB
               value: {{ .Values.postgres.auth.database | quote }}
             - name: POSTGRES_USER
@@ -199,9 +209,9 @@ spec:
             - name: SSL_CERT_FILE
               value: /firewall-certs/ca-cert.pem
             - name: NO_PROXY
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "slackbot")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: no_proxy
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "slackbot")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: CENTAUR_LOG_LEVEL
               value: info
             - name: TOOL_DIRS
@@ -278,6 +288,70 @@ spec:
             - name: SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS
               value: {{ .Values.api.slackEtlExcludedChannelPatterns | quote }}
 {{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_ENABLED") }}
+            - name: DISCORD_ETL_ENABLED
+              value: {{ ternary "1" "0" .Values.api.discordEtlEnabled | quote }}
+{{- end }}
+{{- if and .Values.api.discordGuildId (not (hasKey $apiExtraEnv "DISCORD_GUILD_ID")) }}
+            - name: DISCORD_GUILD_ID
+              value: {{ .Values.api.discordGuildId | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_SYNC_INTERVAL_SECONDS") }}
+            - name: DISCORD_SYNC_INTERVAL_SECONDS
+              value: {{ .Values.api.discordSyncIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_BACKFILL_INTERVAL_SECONDS") }}
+            - name: DISCORD_BACKFILL_INTERVAL_SECONDS
+              value: {{ .Values.api.discordBackfillIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_BACKFILL_CHANNEL_BATCH_LIMIT") }}
+            - name: DISCORD_BACKFILL_CHANNEL_BATCH_LIMIT
+              value: {{ .Values.api.discordBackfillChannelBatchLimit | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_BACKFILL_PAGES_PER_JOB") }}
+            - name: DISCORD_BACKFILL_PAGES_PER_JOB
+              value: {{ .Values.api.discordBackfillPagesPerJob | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_SYNC_RECENT_LIMIT") }}
+            - name: DISCORD_SYNC_RECENT_LIMIT
+              value: {{ .Values.api.discordSyncRecentLimit | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_SYNC_PAGES_PER_CHANNEL") }}
+            - name: DISCORD_SYNC_PAGES_PER_CHANNEL
+              value: {{ .Values.api.discordSyncPagesPerChannel | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_CONTEXT_DOCUMENTS_INTERVAL_SECONDS") }}
+            - name: DISCORD_CONTEXT_DOCUMENTS_INTERVAL_SECONDS
+              value: {{ .Values.api.discordContextDocumentsIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_PERMISSION_MODE") }}
+            - name: DISCORD_ETL_PERMISSION_MODE
+              value: {{ .Values.api.discordEtlPermissionMode | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_EXCLUDED_CHANNEL_IDS") }}
+            - name: DISCORD_ETL_EXCLUDED_CHANNEL_IDS
+              value: {{ .Values.api.discordEtlExcludedChannelIds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS") }}
+            - name: DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS
+              value: {{ .Values.api.discordEtlExcludedChannelPatterns | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS") }}
+            - name: DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS
+              value: {{ .Values.api.discordEtlExcludedCategoryPatterns | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_ALLOWED_CATEGORY_IDS") }}
+            - name: DISCORD_ETL_ALLOWED_CATEGORY_IDS
+              value: {{ .Values.api.discordEtlAllowedCategoryIds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_ALLOWED_CATEGORY_PATTERNS") }}
+            - name: DISCORD_ETL_ALLOWED_CATEGORY_PATTERNS
+              value: {{ .Values.api.discordEtlAllowedCategoryPatterns | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "DISCORD_ETL_TYPICAL_CATEGORY_MIN_COUNT") }}
+            - name: DISCORD_ETL_TYPICAL_CATEGORY_MIN_COUNT
+              value: {{ .Values.api.discordEtlTypicalCategoryMinCount | quote }}
+{{- end }}
             - name: AGENT_IMAGE
               value: {{ printf "%s:%s" .Values.sandbox.image.repository .Values.sandbox.image.tag | quote }}
             - name: KUBERNETES_AGENT_IMAGE_PULL_POLICY
@@ -290,6 +364,12 @@ spec:
               value: {{ include "centaur.secretEnvName" . | quote }}
             - name: KUBERNETES_SECRET_ENV_PREFIX
               value: {{ .Values.secretManager.envPrefix | quote }}
+{{- if .Values.sandbox.codexAuth.existingSecretName }}
+            - name: KUBERNETES_CODEX_AUTH_SECRET_NAME
+              value: {{ .Values.sandbox.codexAuth.existingSecretName | quote }}
+            - name: KUBERNETES_CODEX_AUTH_SECRET_KEY
+              value: {{ .Values.sandbox.codexAuth.secretKey | quote }}
+{{- end }}
 {{- if .Values.secrets.bootstrapSecretName }}
             - name: KUBERNETES_BOOTSTRAP_SECRET_NAME
               value: {{ .Values.secrets.bootstrapSecretName | quote }}
@@ -510,9 +590,9 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /firewall-certs/ca-cert.pem
             - name: NO_PROXY
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
             - name: no_proxy
-              value: {{ printf "localhost,127.0.0.1,%s,%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
 {{- if .Values.slackbot.runtimeErrorAlertChannel }}
             - name: RUNTIME_ERROR_ALERT_CHANNEL
               value: {{ .Values.slackbot.runtimeErrorAlertChannel | quote }}
@@ -540,6 +620,149 @@ spec:
 {{ toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
 {{ toYaml .Values.slackbot.resources | nindent 12 }}
+      volumes:
+        - name: firewall-ca
+          secret:
+            secretName: {{ include "centaur.trustedCaSecretName" . }}
+{{- end }}
+{{ if .Values.discordbot.enabled }}
+{{ if .Values.slackbot.enabled }}
+---
+{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "discordbot") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "discordbot") | nindent 4 }}
+spec:
+  replicas: {{ .Values.discordbot.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "discordbot") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret-env: {{ toJson (dict "secretManager" .Values.secretManager "firewallCa" .Values.firewall.ca) | sha256sum }}
+        checksum/firewall-ca: {{ toJson .Values.firewall.ca | sha256sum }}
+        checksum/infra-secrets: {{ include "centaur.infraSecretsChecksum" . }}
+      labels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "discordbot") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: discordbot
+          image: {{ printf "%s:%s" .Values.discordbot.image.repository .Values.discordbot.image.tag | quote }}
+          imagePullPolicy: {{ .Values.discordbot.image.pullPolicy }}
+          env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sDISCORD_BOT_TOKEN" .Values.secretManager.envPrefix }}
+            - name: DISCORDBOT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sDISCORDBOT_API_KEY" .Values.secretManager.envPrefix }}
+            - name: CENTAUR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sDISCORDBOT_API_KEY" .Values.secretManager.envPrefix }}
+            - name: CENTAUR_API_URL
+              value: {{ printf "http://%s:8000" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
+            - name: HTTPS_PROXY
+              value: {{ include "centaur.firewallProxyUrl" . | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /firewall-certs/ca-cert.pem
+            - name: NO_PROXY
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+            - name: no_proxy
+              value: {{ printf "%s,%s%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" $controlPlaneNoProxyHosts (include "centaur.firewallNoProxyHosts" .) (include "centaur.laminarNoProxyHosts" .) | quote }}
+{{- if and .Values.discordbot.guildId (not (hasKey $discordbotExtraEnv "DISCORD_GUILD_ID")) }}
+            - name: DISCORD_GUILD_ID
+              value: {{ .Values.discordbot.guildId | quote }}
+{{ end }}
+{{- if and .Values.discordbot.applicationId (not (hasKey $discordbotExtraEnv "DISCORD_APPLICATION_ID")) }}
+            - name: DISCORD_APPLICATION_ID
+              value: {{ .Values.discordbot.applicationId | quote }}
+{{- end }}
+{{- if and .Values.discordbot.botUserId (not (hasKey $discordbotExtraEnv "DISCORD_BOT_USER_ID")) }}
+            - name: DISCORD_BOT_USER_ID
+              value: {{ .Values.discordbot.botUserId | quote }}
+{{- end }}
+{{- if and .Values.discordbot.homeForumChannelId (not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_FORUM_CHANNEL_ID")) }}
+            - name: WARRUNNER_HOME_FORUM_CHANNEL_ID
+              value: {{ .Values.discordbot.homeForumChannelId | quote }}
+{{- end }}
+{{- if and .Values.discordbot.homeChannelIds (not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_CHANNEL_IDS")) }}
+            - name: WARRUNNER_HOME_CHANNEL_IDS
+              value: {{ .Values.discordbot.homeChannelIds | quote }}
+{{- end }}
+{{- if and .Values.discordbot.intakeChannelIds (not (hasKey $discordbotExtraEnv "WARRUNNER_INTAKE_CHANNEL_IDS")) }}
+            - name: WARRUNNER_INTAKE_CHANNEL_IDS
+              value: {{ .Values.discordbot.intakeChannelIds | quote }}
+{{- end }}
+{{- if and .Values.discordbot.allowedRoleIds (not (hasKey $discordbotExtraEnv "WARRUNNER_ALLOWED_ROLE_IDS")) }}
+            - name: WARRUNNER_ALLOWED_ROLE_IDS
+              value: {{ .Values.discordbot.allowedRoleIds | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_HISTORY_LIMIT") }}
+            - name: WARRUNNER_HISTORY_LIMIT
+              value: {{ .Values.discordbot.historyLimit | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_REQUIRE_HOME_THREAD") }}
+            - name: WARRUNNER_REQUIRE_HOME_THREAD
+              value: {{ ternary "true" "false" .Values.discordbot.requireHomeThread | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED") }}
+            - name: WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED
+              value: {{ ternary "true" "false" .Values.discordbot.homeChannelMentionRequired | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_TYPING_ENABLED") }}
+            - name: WARRUNNER_TYPING_ENABLED
+              value: {{ ternary "true" "false" .Values.discordbot.typingEnabled | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_TYPING_REFRESH_MS") }}
+            - name: WARRUNNER_TYPING_REFRESH_MS
+              value: {{ .Values.discordbot.typingRefreshMs | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "WARRUNNER_TYPING_TIMEOUT_MS") }}
+            - name: WARRUNNER_TYPING_TIMEOUT_MS
+              value: {{ .Values.discordbot.typingTimeoutMs | quote }}
+{{- end }}
+{{- if not (hasKey $discordbotExtraEnv "DISCORD_GATEWAY_ENABLED") }}
+            - name: DISCORD_GATEWAY_ENABLED
+              value: {{ ternary "true" "false" .Values.discordbot.gatewayEnabled | quote }}
+{{- end }}
+{{- range $name, $value := .Values.discordbot.extraEnv }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+{{- end }}
+          ports:
+            - containerPort: 3002
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3002
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+          volumeMounts:
+            - name: firewall-ca
+              mountPath: /firewall-certs
+              readOnly: true
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+{{ toYaml .Values.discordbot.resources | nindent 12 }}
       volumes:
         - name: firewall-ca
           secret:

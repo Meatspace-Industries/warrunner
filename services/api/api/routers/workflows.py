@@ -15,6 +15,7 @@ from api.workflow_engine import (
     create_workflow_run,
     get_workflow_checkpoints,
     get_workflow_run,
+    list_registered_workflows,
     list_workflow_runs,
 )
 
@@ -87,6 +88,21 @@ async def create_run(request: Request, body: WorkflowRunCreateRequest):
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+
+
+@router.get("/registered")
+async def registered_workflows(request: Request):
+    info = get_key_info(request)
+    if not (
+        check_scope(info, "agent:execute")
+        or check_scope(info, "admin")
+        or check_scope(info, "workflows", "")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="API key scope does not permit listing registered workflows",
+        )
+    return {"workflows": list_registered_workflows()}
 
 
 @router.get("/runs")

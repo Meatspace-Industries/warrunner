@@ -3638,6 +3638,7 @@ async def test_bootstrap_service_api_keys_inserts_missing_rows(db_pool, monkeypa
 
     slack_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     monkeypatch.setenv("SLACKBOT_API_KEY", slack_key)
+    monkeypatch.delenv("DISCORDBOT_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
     bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
@@ -3678,6 +3679,7 @@ async def test_bootstrap_service_api_keys_reactivates_revoked_rows(
         "manual",
     )
     monkeypatch.setenv("SLACKBOT_API_KEY", slack_key)
+    monkeypatch.delenv("DISCORDBOT_API_KEY", raising=False)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
     bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
@@ -3700,6 +3702,7 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
 
     local_dev_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
+    monkeypatch.delenv("DISCORDBOT_API_KEY", raising=False)
     monkeypatch.setenv("LOCAL_DEV_API_KEY", local_dev_key)
 
     bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
@@ -3713,4 +3716,28 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
     assert row["name"] == "service:local-dev"
     assert list(row["scopes"]) == ["admin", "agent", "threads", "tools:*"]
     assert row["revoked_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_service_api_keys_includes_discordbot_key(db_pool, monkeypatch):
+    import api.api_keys as api_keys
+
+    discordbot_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
+    monkeypatch.setenv("DISCORDBOT_API_KEY", discordbot_key)
+    monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
+
+    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
+
+    assert [info.name for info in bootstrapped] == ["service:discordbot"]
+    row = await db_pool.fetchrow(
+        "SELECT name, key_prefix, scopes, revoked_at, created_by FROM api_keys WHERE key_hash = $1",
+        hashlib.sha256(discordbot_key.encode()).hexdigest(),
+    )
+    assert row is not None
+    assert row["name"] == "service:discordbot"
+    assert row["key_prefix"] == discordbot_key[:8]
+    assert list(row["scopes"]) == ["agent"]
+    assert row["revoked_at"] is None
+    assert row["created_by"] == "service-bootstrap"
     assert row["created_by"] == "service-bootstrap"

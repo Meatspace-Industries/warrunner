@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.28.1",
   "scripts": {
+    "discordbot:test": "pnpm --filter discordbot test",
     "slackbot:delivery-regression": "pnpm --filter slackbot test"
   }
 }

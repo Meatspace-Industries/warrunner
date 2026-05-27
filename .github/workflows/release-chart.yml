@@ -54,6 +54,12 @@ jobs:
         with:
           version: v4.1.1
 
+      - name: Add chart repositories
+        run: helm repo add 1password https://1password.github.io/connect-helm-charts --force-update
+
+      - name: Build chart dependencies
+        run: helm dependency build contrib/chart
+
       - name: Lint chart
         run: helm lint contrib/chart
 

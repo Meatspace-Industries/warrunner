@@ -1,0 +1,71 @@
+# Warrunner's default Meatspace deployment shape uses a mention-gated Discord
+# home channel. Forum-thread routing remains available when a real forum/media
+# channel is configured.
+
+api:
+  executionWorkerEnabled: true
+  workflowWorkerEnabled: true
+  # GitHub App installation tokens are short-lived; avoid aging them in idle pods.
+  warmPoolEnabled: false
+  slackEtlEnabled: false
+  discordEtlEnabled: true
+  discordEtlPermissionMode: category_default
+  discordEtlExcludedChannelPatterns: "*founder*,*founders*,*admin*,*private*,*sensitive*,*legal*,*finance*,*bank*,*payroll*,*signatory*,*security*,*privacy*,*tos*"
+  discordEtlExcludedCategoryPatterns: "*founder*,*founders*,*admin*,*private*,*sensitive*,*legal*,*finance*,*bank*,*payroll*,*signatory*,*security*,*privacy*,*tos*"
+  discordEtlTypicalCategoryMinCount: 2
+  discordBackfillIntervalSeconds: 60
+  discordBackfillChannelBatchLimit: 20
+  discordBackfillPagesPerJob: 5
+  extraEnv:
+    CENTAUR_DEPLOYMENT_NAME: warrunner
+    CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY
+    CENTAUR_REQUIRE_GITHUB_APP_AUTH: "true"
+    # Keep repo-scoped turns below the GitHub App token lifetime, leaving room
+    # for proxy/pod readiness waits and a safety buffer.
+    GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S: "2400"
+    GITHUB_APP_REPO_SESSION_REFRESH_MARGIN_S: "2700"
+    # Cold GKE nodes can take longer than Centaur's 60s default to pull the agent image.
+    KUBERNETES_SANDBOX_READY_TIMEOUT_S: "300"
+    WARRUNNER_ALLOWED_GITHUB_REPOS: Meatspace-Industries/dappios,Meatspace-Industries/dapp-backend,Meatspace-Industries/dappweb
+    WARRUNNER_GITHUB_REPO_ALIASES: dappios=Meatspace-Industries/dappios,dapp-ios=Meatspace-Industries/dappios,ios=Meatspace-Industries/dappios,dapp-backend=Meatspace-Industries/dapp-backend,backend=Meatspace-Industries/dapp-backend,dappweb=Meatspace-Industries/dappweb,dapp-web=Meatspace-Industries/dappweb,web=Meatspace-Industries/dappweb
+
+ironProxy:
+  secretSource: env
+
+slackbot:
+  enabled: false
+
+discordbot:
+  enabled: true
+  image:
+    repository: ghcr.io/meatspace-industries/warrunner-discordbot
+    tag: latest
+    pullPolicy: Always
+  applicationId: ""
+  botUserId: ""
+  guildId: ""
+  homeForumChannelId: ""
+  homeChannelIds: ""
+  intakeChannelIds: ""
+  allowedRoleIds: ""
+  historyLimit: 40
+  requireHomeThread: true
+  homeChannelMentionRequired: true
+
+overlay:
+  image:
+    repository: ghcr.io/meatspace-industries/warrunner-overlay
+    tag: latest
+    pullPolicy: Always
+    sourcePath: /overlay
+
+sandbox:
+  codexAuth:
+    existingSecretName: warrunner-codex-auth
+    secretKey: auth.json
+  extraEnv:
+    WARRUNNER_RUNTIME_STATE_DIR: /var/lib/meepo
+
+repoCache:
+  enabled: false
+  hostPath: /var/lib/meepo/repos

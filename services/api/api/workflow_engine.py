@@ -1096,6 +1096,7 @@ async def do_agent_turn(
     harness: str | None = None,
     persona: str | None = None,
     agents_md_override: str | None = None,
+    repo: str | None = None,
 ) -> dict[str, Any]:
     """Orchestrate spawn → message → execute → wait-for-terminal.
 
@@ -1140,6 +1141,8 @@ async def do_agent_turn(
         else:
             effective_delivery = dict(run_in.get("delivery") or {})
         effective_history = history_messages or run_in.get("history_messages") or []
+        effective_repo_raw = repo or run_in.get("repo") or ""
+        effective_repo = str(effective_repo_raw).strip() or None
         selector = {"persona_id": persona, "harness": harness}
         slackbot_session_id: str | None = None
 
@@ -1152,6 +1155,7 @@ async def do_agent_turn(
                 engine=None,
                 persona_id=persona,
                 agents_md_override=agents_md_override,
+                repo=effective_repo,
             )
         except Exception as exc:
             try:
@@ -1536,6 +1540,19 @@ def get_workflow_handler(
     workflow_name: str,
 ) -> _RegisteredHandler | None:
     return _WORKFLOW_HANDLERS.get(workflow_name)
+
+
+def list_registered_workflows() -> list[dict[str, Any]]:
+    """Return registered workflow handlers without exposing callable objects."""
+    return [
+        {
+            "name": name,
+            "source_path": registered.source_path,
+            "version": registered.version,
+            "scheduled": registered.schedule is not None,
+        }
+        for name, registered in sorted(_WORKFLOW_HANDLERS.items())
+    ]
 
 
 # ── Schedule specs ────────────────────────────────────────────────────

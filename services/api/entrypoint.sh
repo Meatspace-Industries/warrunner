@@ -27,8 +27,10 @@ print('\n'.join(sorted(deps)))
     _extra_deps+=$'\n'
   done
   if [[ -n "${_extra_deps}" ]]; then
-    echo "$_extra_deps" | sort -u | grep -v '^$' > /tmp/_extra_deps.txt
-    uv pip install -r /tmp/_extra_deps.txt --quiet 2>/dev/null || true
+    printf '%s\n' "$_extra_deps" | awk 'NF' | sort -u > /tmp/_extra_deps.txt
+    if [[ -s /tmp/_extra_deps.txt ]]; then
+      uv pip install -r /tmp/_extra_deps.txt --quiet 2>/dev/null || true
+    fi
     rm -f /tmp/_extra_deps.txt
   fi
 fi

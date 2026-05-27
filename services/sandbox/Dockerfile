@@ -44,7 +44,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # ── Non-root agent user ─────────────────────────────────────────────────────
 RUN useradd -m -s /bin/bash -u 1001 agent \
-    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent
+    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent \
+    && mkdir -p /home/agent/.cache /home/agent/.config /home/agent/.local/bin \
+    && chown -R agent:agent /home/agent/.cache /home/agent/.config /home/agent/.local
 
 ARG CLAUDE_CODE_VERSION=2.1.143
 ARG CODEX_VERSION=0.130.0
@@ -128,7 +130,11 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
 
 # ── Agent skills + workspace setup (rarely changes) ─────────────────────────
 RUN --mount=type=cache,target=/home/agent/.npm,uid=1001,gid=1001,sharing=locked \
-    npx -y skills add vercel-labs/agent-browser
+    npx -y skills add vercel-labs/agent-browser \
+      --agent codex amp claude-code opencode \
+      --yes \
+      --copy \
+    && rm -f skills-lock.json
 RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace \
     && git config --global init.defaultBranch main \
     && git config --global push.autoSetupRemote true \

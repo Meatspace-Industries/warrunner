@@ -22,6 +22,8 @@ EXACT_QUERY_TITLE_BOOST = 8
 EXACT_QUERY_BODY_BOOST = 2
 THREAD_SCORE_MULTIPLIER = 1.25
 CHANNEL_DAY_SCORE_MULTIPLIER = 0.75
+DISCORD_THREAD_SCORE_MULTIPLIER = 1.3
+DISCORD_CHANNEL_DAY_SCORE_MULTIPLIER = 0.8
 DEFAULT_PREVIEW_CHARS = 280
 MAX_RELATED_CHILDREN = 25
 SLACK_LIVE_SOURCE_TYPE = "slack_live_message"
@@ -327,6 +329,8 @@ class CompanyContextClient:
                     * CASE source_type
                         WHEN 'slack_thread' THEN {THREAD_SCORE_MULTIPLIER}
                         WHEN 'slack_channel_day' THEN {CHANNEL_DAY_SCORE_MULTIPLIER}
+                        WHEN 'discord_thread' THEN {DISCORD_THREAD_SCORE_MULTIPLIER}
+                        WHEN 'discord_channel_day' THEN {DISCORD_CHANNEL_DAY_SCORE_MULTIPLIER}
                         ELSE 1.0
                     END DESC,
                     source_updated_at DESC NULLS LAST

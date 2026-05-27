@@ -1,0 +1,10 @@
+[project]
+name = "discord-history"
+version = "0.1.0"
+description = "Credential-free Discord history search over local JSONL exports"
+dependencies = []
+
+[tool.centaur]
+module = "client.py"
+hosts = []
+secrets = []

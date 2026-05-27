@@ -1,0 +1,33 @@
+{
+  "name": "discordbot",
+  "version": "0.0.0",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "imports": {
+    "#*": "./src/*",
+    "#package.json": "./package.json"
+  },
+  "scripts": {
+    "dev": "bun --hot --watch src/index.ts",
+    "dogfood": "bun src/dogfood.ts",
+    "dogfood:emulated": "bun src/dogfood.ts emulated",
+    "dogfood:live": "bun src/dogfood.ts live",
+    "dogfood:preflight": "bun src/dogfood.ts preflight",
+    "dogfood:chat": "bun src/dogfood.ts chat",
+    "dogfood:session": "bun src/dogfood.ts session",
+    "dogfood:smoke": "bun src/dogfood.ts smoke",
+    "test": "bun test src/*.test.ts src/**/*.test.ts",
+    "check:types": "bun tsgo --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.12.18",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@total-typescript/ts-reset": "^0.6.1",
+    "@types/bun": "^1.3.13",
+    "@types/node": "^25.7.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260512.1",
+    "typescript": "^6.0.3"
+  }
+}

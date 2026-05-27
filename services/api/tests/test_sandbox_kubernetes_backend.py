@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import datetime as dt
 import json
 import sys
 import types
@@ -9,13 +11,17 @@ from types import SimpleNamespace
 import pytest
 from aiohttp import WSMsgType
 
+from api.github_app import GitHubInstallationToken
+from api.proxy_config import assign_pg_listen_ports, render_proxy_yaml
 from api.sandbox.base import SandboxSession
 from api.sandbox.config import container_env as sandbox_container_env
 from api.sandbox.kubernetes import (
     KubernetesExecutorBackend,
     STDOUT_CHANNEL,
+    _secrets_without_ref,
 )
 from api.sandbox.registry import auto_configure
+from api.tool_manager import HttpSecret, PgDsnSecret
 
 
 class FakeCoreApi:
@@ -127,6 +133,19 @@ class FakeWsCoreApi:
     ):
         self.exec_calls.append((name, namespace, kwargs))
         return FakeWebSocketContext(self.websocket)
+
+
+@pytest.fixture(autouse=True)
+def clear_github_app_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "CENTAUR_REQUIRE_GITHUB_APP_AUTH",
+        "GITHUB_APP_ID",
+        "GITHUB_APP_INSTALLATION_ID",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_APP_PRIVATE_KEY_BASE64",
+        "GITHUB_APP_PRIVATE_KEY_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 class FakeNetworkingApi:
@@ -260,6 +279,33 @@ def test_container_env_applies_kubernetes_sandbox_extra_env(
     assert env_map["LMNR_BASE_URL"] == "http://laminar.internal:8000"
     assert len([item for item in env if item.startswith("NO_PROXY=")]) == 1
     assert len([item for item in env if item.startswith("no_proxy=")]) == 1
+
+
+def test_container_env_skips_disabled_sandbox_extra_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY")
+    monkeypatch.setenv(
+        "KUBERNETES_SANDBOX_EXTRA_ENV",
+        json.dumps(
+            [
+                {"name": "OPENAI_API_KEY", "value": "sk-should-not-enter-pod"},
+                {"name": "LMNR_BASE_URL", "value": "http://laminar.internal:8000"},
+            ]
+        ),
+    )
+
+    env = sandbox_container_env(
+        "thread-key",
+        "sandbox-id",
+        "firewall.internal",
+        omit_openai_api_key=True,
+    )
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert "OPENAI_API_KEY" not in env_map
+    assert env_map["LMNR_BASE_URL"] == "http://laminar.internal:8000"
 
 
 def test_prompt_bundle_includes_live_capability_inventory_guidance(
@@ -402,27 +448,58 @@ async def test_ensure_clients_disables_proxy_env(
 
 
 @pytest.mark.asyncio
-async def test_create_requires_repo_cache_volume_for_repo(
+async def test_create_allows_repo_without_repo_cache_volume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
 
     monkeypatch.setenv("AGENT_API_URL", "http://api:8000")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db/centaur")
     monkeypatch.setenv("FIREWALL_HOST", "firewall")
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.delenv("REPOS_PATH", raising=False)
+    monkeypatch.setattr("api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.container_env",
+        lambda *_args, **_kwargs: [
+            "CENTAUR_API_URL=http://api:8000",
+            "CENTAUR_API_KEY=sandbox-token",
+        ],
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
 
     async def fake_ensure_clients() -> None:
         return None
 
-    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
 
-    with pytest.raises(ValueError, match="REPOS_PATH is required"):
-        await backend.create(
-            "slack:C123:123.456",
-            "amp",
-            "amp",
-            repo="paradigmxyz/centaur",
-        )
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    await backend.create(
+        "slack:C123:123.456",
+        "amp",
+        "amp",
+        repo="paradigmxyz/centaur",
+    )
+
+    pod_body = fake_core.created_pods[1][1]
+    container = pod_body["spec"]["containers"][0]
+    env = {item["name"]: item["value"] for item in container["env"]}
+
+    assert env["AGENT_REPO"] == "paradigmxyz/centaur"
+    assert all(mount["name"] != "repos" for mount in container["volumeMounts"])
+    assert all(volume["name"] != "repos" for volume in pod_body["spec"]["volumes"])
 
 
 @pytest.mark.asyncio
@@ -513,6 +590,7 @@ async def test_create_builds_pod_and_prompt_secret(
     assert env["CENTAUR_API_KEY"] == "sandbox-token"
     assert env["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
     assert env["AMP_API_KEY"] == "AMP_API_KEY"
+    assert env["AMP_CONTINUE_THREAD_ID"] == "T-123"
     assert env["CENTAUR_OVERLAY_DIR"] == "/home/agent/overlay/org"
     assert env["AGENT_PERSONA"] == "eng"
     assert env["AGENT_REPO"] == "paradigmxyz/centaur"
@@ -522,7 +600,7 @@ async def test_create_builds_pod_and_prompt_secret(
     )
     assert {
         "name": "repos",
-        "hostPath": {"path": "/var/lib/centaur/repos", "type": "Directory"},
+        "hostPath": {"path": "/var/lib/centaur/repos", "type": "DirectoryOrCreate"},
     } in pod_body["spec"]["volumes"]
     assert any(
         volume["name"] == "overlay-root" for volume in pod_body["spec"]["volumes"]
@@ -567,6 +645,73 @@ async def test_create_builds_pod_and_prompt_secret(
 
 
 @pytest.mark.asyncio
+async def test_create_codex_pod_mounts_chatgpt_auth_without_openai_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db/centaur")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_NAME", "warrunner-codex-auth")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_KEY", "auth-state.json")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["codex-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: [])
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    await backend.create(
+        "discord:1435290709363130390:1508220472569888950:thread",
+        "codex",
+        "codex",
+        resume_thread_id="stale-amp-thread",
+    )
+
+    sandbox_pod = fake_core.created_pods[1][1]
+    container = sandbox_pod["spec"]["containers"][0]
+    env = {item["name"]: item["value"] for item in container["env"]}
+    volume_mounts = {item["name"]: item for item in container["volumeMounts"]}
+    volumes = {item["name"]: item for item in sandbox_pod["spec"]["volumes"]}
+
+    assert "OPENAI_API_KEY" not in env
+    assert "AMP_CONTINUE_THREAD_ID" not in env
+    assert "CODEX_CONTINUE_THREAD_ID" not in env
+    assert env["CENTAUR_CODEX_AUTH_JSON"] == "/home/agent/codex-auth/auth.json"
+    assert env["CODEX_HOME"] == "/home/agent/.codex"
+    assert volume_mounts["codex-auth"] == {
+        "name": "codex-auth",
+        "mountPath": "/home/agent/codex-auth",
+        "readOnly": True,
+    }
+    assert volumes["codex-auth"] == {
+        "name": "codex-auth",
+        "secret": {
+            "secretName": "warrunner-codex-auth",
+            "items": [{"key": "auth-state.json", "path": "auth.json"}],
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_builds_per_sandbox_proxy_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -581,10 +726,24 @@ async def test_create_builds_per_sandbox_proxy_resources(
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
     monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
     monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("REPOS_PATH", "/var/lib/centaur/repos")
     monkeypatch.setenv("KUBERNETES_IRON_PROXY_IMAGE", "centaur-iron-proxy:test")
     monkeypatch.setenv(
         "KUBERNETES_FIREWALL_MANAGER_IMAGE", "centaur-firewall-manager:test"
     )
+    secrets = [
+        HttpSecret(
+            name="ANTHROPIC_API_KEY",
+            secret_ref="ANTHROPIC_API_KEY",
+            hosts=("api.anthropic.com",),
+            match_headers=("X-Api-Key",),
+        ),
+        PgDsnSecret(
+            name="APP_DB",
+            secret_ref="APP_DATABASE_URL",
+            database="app",
+        ),
+    ]
     monkeypatch.setattr(
         "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
     )
@@ -592,6 +751,7 @@ async def test_create_builds_per_sandbox_proxy_resources(
         "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
     )
     monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: secrets)
 
     async def fake_ensure_clients() -> None:
         return None
@@ -633,14 +793,25 @@ async def test_create_builds_per_sandbox_proxy_resources(
     assert [container["name"] for container in proxy_pod["spec"]["containers"]] == [
         "iron-proxy",
     ]
-    assert proxy_pod["spec"]["containers"][0]["image"] == "centaur-iron-proxy:test"
-    assert proxy_pod["spec"]["containers"][0]["readinessProbe"]["periodSeconds"] == 5
+    proxy_container = proxy_pod["spec"]["containers"][0]
+    assert proxy_container["image"] == "centaur-iron-proxy:test"
+    assert proxy_container["readinessProbe"]["periodSeconds"] == 5
     assert (
-        proxy_pod["spec"]["containers"][0]["readinessProbe"]["failureThreshold"] == 30
+        proxy_container["readinessProbe"]["failureThreshold"] == 30
     )
-    assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
-        {"secretRef": {"name": "centaur-infra-env"}}
-    ]
+    assert proxy_container["envFrom"] == []
+    proxy_env = {item["name"]: item for item in proxy_container["env"]}
+    assert "OPENAI_API_KEY" not in proxy_env
+    assert proxy_env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "ANTHROPIC_API_KEY",
+        "optional": True,
+    }
+    assert proxy_env["APP_DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "APP_DATABASE_URL",
+        "optional": True,
+    }
     # ConfigMap with the rendered proxy.yaml is created before the pod.
     assert fake_core.created_configmaps, "proxy ConfigMap not created"
     configmap = fake_core.created_configmaps[0][1]
@@ -670,6 +841,320 @@ async def test_create_builds_per_sandbox_proxy_resources(
 
 
 @pytest.mark.asyncio
+async def test_create_uses_github_app_installation_token_for_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("REPOS_PATH", "/var/lib/centaur/repos")
+    secrets = [
+        HttpSecret(
+            name="GITHUB_TOKEN",
+            secret_ref="GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="GITHUB_BASIC_AUTH",
+            secret_ref="GITHUB_BASIC_AUTH",
+            hosts=("github.com",),
+            match_headers=("Authorization",),
+        ),
+    ]
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: secrets)
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    async def fake_mint_github_app_installation_token_details(
+        *, repository: str | None = None,
+        require_repository: bool = False,
+    ) -> GitHubInstallationToken:
+        assert repository == "Meatspace-Industries/dappios"
+        assert require_repository is True
+        return GitHubInstallationToken(
+            token="ghs_installation",
+            expires_at=dt.datetime(2026, 5, 27, 8, 30, tzinfo=dt.timezone.utc),
+        )
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.mint_github_app_installation_token_details",
+        fake_mint_github_app_installation_token_details,
+    )
+
+    session = await backend.create(
+        "discord:guild:channel:thread",
+        "codex",
+        "codex",
+        repo="Meatspace-Industries/dappios",
+    )
+
+    assert session.github_token_expires_at == pytest.approx(1_779_870_600.0)
+    prompt_secret = fake_core.created_secrets[0][1]
+    prompt_secret_name = prompt_secret["metadata"]["name"]
+    assert prompt_secret["stringData"] == {
+        "AGENTS_BASE.md": "prompt",
+        "GITHUB_TOKEN": "ghs_installation",
+        "GITHUB_BASIC_AUTH": base64.b64encode(
+            b"x-access-token:ghs_installation"
+        ).decode(),
+    }
+
+    proxy_pod = fake_core.created_pods[0][1]
+    proxy_container = proxy_pod["spec"]["containers"][0]
+    proxy_env = {item["name"]: item for item in proxy_container["env"]}
+    assert proxy_env["GITHUB_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": prompt_secret_name,
+        "key": "GITHUB_TOKEN",
+        "optional": False,
+    }
+    assert proxy_env["GITHUB_BASIC_AUTH"]["valueFrom"]["secretKeyRef"] == {
+        "name": prompt_secret_name,
+        "key": "GITHUB_BASIC_AUTH",
+        "optional": False,
+    }
+
+    sandbox_pod = fake_core.created_pods[1][1]
+    volumes = {item["name"]: item for item in sandbox_pod["spec"]["volumes"]}
+    assert volumes["prompt-bundle"]["secret"] == {
+        "secretName": prompt_secret_name,
+        "items": [{"key": "AGENTS_BASE.md", "path": "AGENTS_BASE.md"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_blocks_legacy_github_token_fallback_without_repo_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    secrets = [
+        HttpSecret(
+            name="GITHUB_TOKEN",
+            secret_ref="GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="GITHUB_BASIC_AUTH",
+            secret_ref="GITHUB_BASIC_AUTH",
+            hosts=("github.com",),
+            match_headers=("Authorization",),
+        ),
+    ]
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: secrets)
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.github_app_config_from_env",
+        lambda: object(),
+    )
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    async def fake_mint_github_app_installation_token_details(**_kwargs: object) -> str:
+        raise AssertionError("repo-less sandboxes must not mint GitHub App tokens")
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.mint_github_app_installation_token_details",
+        fake_mint_github_app_installation_token_details,
+    )
+
+    await backend.create("discord:guild:channel:thread", "codex", "codex")
+
+    prompt_secret = fake_core.created_secrets[0][1]
+    prompt_secret_name = prompt_secret["metadata"]["name"]
+    assert prompt_secret["stringData"] == {
+        "AGENTS_BASE.md": "prompt",
+        "GITHUB_TOKEN": "github-app-repository-scope-required",
+        "GITHUB_BASIC_AUTH": "github-app-basic-auth-repository-scope-required",
+    }
+
+    proxy_pod = fake_core.created_pods[0][1]
+    proxy_env = {item["name"]: item for item in proxy_pod["spec"]["containers"][0]["env"]}
+    assert proxy_env["GITHUB_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": prompt_secret_name,
+        "key": "GITHUB_TOKEN",
+        "optional": False,
+    }
+    assert proxy_env["GITHUB_BASIC_AUTH"]["valueFrom"]["secretKeyRef"] == {
+        "name": prompt_secret_name,
+        "key": "GITHUB_BASIC_AUTH",
+        "optional": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_requires_github_app_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "1")
+    secrets = [
+        HttpSecret(
+            name="GITHUB_TOKEN",
+            secret_ref="GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
+        )
+    ]
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: secrets)
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+
+    with pytest.raises(ValueError, match="GitHub App auth is required"):
+        await backend.create("discord:guild:channel:thread", "codex", "codex")
+
+    assert fake_core.created_secrets == []
+    assert fake_core.created_pods == []
+
+
+@pytest.mark.asyncio
+async def test_create_requires_env_secret_source_for_github_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "1")
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+    secrets = [
+        HttpSecret(
+            name="GITHUB_TOKEN",
+            secret_ref="GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
+        )
+    ]
+    monkeypatch.setattr(backend, "_collect_secrets", lambda: secrets)
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+
+    with pytest.raises(ValueError, match="FIREWALL_MANAGER_SECRET_SOURCE=env"):
+        await backend.create("discord:guild:channel:thread", "codex", "codex")
+
+    assert fake_core.created_secrets == []
+    assert fake_core.created_pods == []
+
+
+def test_api_proxy_filters_github_token_secret_defs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    secrets = [
+        HttpSecret(
+            name="GITHUB_TOKEN",
+            secret_ref="GITHUB_TOKEN",
+            hosts=("github.com", "api.github.com"),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="GITHUB_BASIC_AUTH",
+            secret_ref="GITHUB_BASIC_AUTH",
+            hosts=("github.com",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="ANTHROPIC_API_KEY",
+            secret_ref="ANTHROPIC_API_KEY",
+            hosts=("api.anthropic.com",),
+            match_headers=("Authorization",),
+        ),
+    ]
+
+    filtered = _secrets_without_ref(
+        _secrets_without_ref(secrets, "GITHUB_TOKEN"),
+        "GITHUB_BASIC_AUTH",
+    )
+    rendered = render_proxy_yaml(
+        filtered,
+        pg_listen_ports=assign_pg_listen_ports(filtered),
+    )
+    spec = backend._build_proxy_pod_spec(
+        "api",
+        filtered,
+        [],
+        {},
+        restart_policy="Always",
+    )
+    proxy_env = {item["name"]: item for item in spec["containers"][0]["env"]}
+
+    assert "GITHUB_TOKEN" not in rendered
+    assert "GITHUB_TOKEN" not in proxy_env
+    assert "GITHUB_BASIC_AUTH" not in rendered
+    assert "GITHUB_BASIC_AUTH" not in proxy_env
+    assert "ANTHROPIC_API_KEY" in rendered
+    assert "ANTHROPIC_API_KEY" in proxy_env
+
+
+@pytest.mark.asyncio
 async def test_per_sandbox_proxy_uses_bootstrap_secret_for_onepassword(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -683,13 +1168,55 @@ async def test_per_sandbox_proxy_uses_bootstrap_secret_for_onepassword(
         return None
 
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
-    await backend._create_proxy_pod("sandbox-pod", [], {})
+    await backend._create_proxy_pod("sandbox-pod", [], [], {})
 
     proxy_pod = fake_core.created_pods[0][1]
     assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
-        {"secretRef": {"name": "centaur-infra-env"}},
         {"secretRef": {"name": "centaur-bootstrap"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_per_sandbox_proxy_skips_disabled_infra_secret_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    backend._core = fake_core
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY")
+    secrets = [
+        HttpSecret(
+            name="OPENAI_API_KEY",
+            secret_ref="OPENAI_API_KEY",
+            hosts=("api.openai.com",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
+            name="ANTHROPIC_API_KEY",
+            secret_ref="ANTHROPIC_API_KEY",
+            hosts=("api.anthropic.com",),
+            match_headers=("X-Api-Key",),
+        ),
+    ]
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    await backend._create_proxy_pod("sandbox-pod", secrets, [], {})
+
+    proxy_pod = fake_core.created_pods[0][1]
+    proxy_container = proxy_pod["spec"]["containers"][0]
+    proxy_env = {item["name"]: item for item in proxy_container["env"]}
+    assert proxy_container["envFrom"] == []
+    assert "OPENAI_API_KEY" not in proxy_env
+    assert proxy_env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "ANTHROPIC_API_KEY",
+        "optional": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -943,7 +1470,7 @@ async def test_create_mounts_repo_cache_host_path(
     )
     assert {
         "name": "repos",
-        "hostPath": {"path": "/var/lib/centaur/repos", "type": "Directory"},
+        "hostPath": {"path": "/var/lib/centaur/repos", "type": "DirectoryOrCreate"},
     } in pod_body["spec"]["volumes"]
 
 

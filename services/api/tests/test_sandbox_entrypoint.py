@@ -6,6 +6,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 
 ENTRYPOINT_SH = Path(__file__).resolve().parents[2] / "sandbox" / "entrypoint.sh"
 
@@ -54,6 +56,37 @@ def _write_codex_harness_config(home: Path) -> Path:
         )
     )
     return harness_dir
+
+
+def _valid_codex_auth_payload() -> dict[str, object]:
+    return {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "id-token",
+            "account_id": "account-id",
+        },
+        "last_refresh": "2026-05-24T00:00:00.000Z",
+    }
+
+
+def _write_codex_app_wrapper(bin_dir: Path, body: str | None = None) -> Path:
+    wrapper = bin_dir / "codex-app-wrapper"
+    wrapper.write_text(
+        body
+        or "\n".join(
+            [
+                "#!/bin/sh",
+                "printf 'wrapper-ran\\n'",
+                'cat "$HOME/.codex/auth.json"',
+                "",
+            ]
+        )
+    )
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 def test_sandbox_entrypoint_bootstraps_mock_google_adc(tmp_path: Path) -> None:
@@ -136,6 +169,276 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
+
+
+def test_sandbox_entrypoint_configures_proxy_rewritable_github_auth(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            "git config --global --get-all http.https://github.com/.extraheader; "
+            'test ! -f "$HOME/.git-credentials"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "GITHUB_TOKEN": "GITHUB_TOKEN",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert result.stdout.strip() == "Authorization: Basic GITHUB_BASIC_AUTH"
+
+
+def test_sandbox_entrypoint_installs_mounted_codex_auth_json(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    auth_src = tmp_path / "codex-auth" / "auth.json"
+    auth_src.parent.mkdir()
+    auth_payload = _valid_codex_auth_payload()
+    auth_src.write_text(json.dumps(auth_payload))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\necho 'codex login should not run' >&2\nexit 42\n")
+    codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            'cat "$HOME/.codex/auth.json"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CENTAUR_CODEX_AUTH_JSON": str(auth_src),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == auth_payload
+    assert "codex login should not run" not in result.stderr
+
+
+def test_sandbox_entrypoint_runs_codex_wrapper_with_mounted_chatgpt_auth(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    auth_src = tmp_path / "codex-auth" / "auth.json"
+    auth_src.parent.mkdir()
+    auth_payload = _valid_codex_auth_payload()
+    auth_src.write_text(json.dumps(auth_payload))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_codex_app_wrapper(bin_dir)
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\necho 'codex login should not run' >&2\nexit 42\n")
+    codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "codex-app-wrapper",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CENTAUR_CODEX_AUTH_JSON": str(auth_src),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    prefix, auth_json = result.stdout.split("\n", 1)
+    assert prefix == "wrapper-ran"
+    assert json.loads(auth_json) == auth_payload
+    assert (home / ".ready").is_file()
+    assert "codex login should not run" not in result.stderr
+
+
+def test_sandbox_entrypoint_requires_mounted_chatgpt_auth_for_codex_wrapper(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "wrapper-ran"
+    _write_codex_app_wrapper(
+        bin_dir,
+        "\n".join(
+            [
+                "#!/bin/sh",
+                f"touch {marker}",
+                "echo wrapper-ran",
+                "",
+            ]
+        ),
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "codex-app-wrapper",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "fatal: codex_chatgpt_auth_required" in result.stderr
+    assert not (home / ".ready").exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("api_key_env", ["OPENAI_API_KEY", "CODEX_API_KEY"])
+def test_sandbox_entrypoint_rejects_api_key_env_for_codex_wrapper(
+    tmp_path: Path, api_key_env: str
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    auth_src = tmp_path / "codex-auth" / "auth.json"
+    auth_src.parent.mkdir()
+    auth_src.write_text(json.dumps(_valid_codex_auth_payload()))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "wrapper-ran"
+    _write_codex_app_wrapper(
+        bin_dir,
+        "\n".join(
+            [
+                "#!/bin/sh",
+                f"touch {marker}",
+                "echo wrapper-ran",
+                "",
+            ]
+        ),
+    )
+
+    env = {
+        "HOME": str(home),
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+        "CENTAUR_CODEX_AUTH_JSON": str(auth_src),
+        api_key_env: "sk-should-not-be-used",
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "codex-app-wrapper",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "fatal: codex_api_key_login_disabled" in result.stderr
+    assert not (home / ".ready").exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("auth_payload", "error"),
+    [
+        (
+            {
+                "auth_mode": "api_key",
+                "OPENAI_API_KEY": "sk-test",
+            },
+            "configured Codex auth JSON must have auth_mode=chatgpt",
+        ),
+        (
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {},
+            },
+            "configured Codex auth JSON is missing tokens.refresh_token",
+        ),
+        (
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": "sk-test",
+                "tokens": {"refresh_token": "refresh-token"},
+            },
+            "configured Codex auth JSON must not contain OPENAI_API_KEY",
+        ),
+    ],
+)
+def test_sandbox_entrypoint_rejects_non_chatgpt_codex_auth_json(
+    tmp_path: Path, auth_payload: dict[str, object], error: str
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    auth_src = tmp_path / "codex-auth" / "auth.json"
+    auth_src.parent.mkdir()
+    auth_src.write_text(json.dumps(auth_payload))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\necho 'codex login should not run' >&2\nexit 42\n")
+    codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            "true",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CENTAUR_CODEX_AUTH_JSON": str(auth_src),
+        },
+    )
+
+    assert result.returncode == 1
+    assert error in result.stderr
+    assert "codex login should not run" not in result.stderr
+    assert not (home / ".codex" / "auth.json").exists()
 
 
 def test_sandbox_entrypoint_appends_codex_laminar_otel_config(tmp_path: Path) -> None:

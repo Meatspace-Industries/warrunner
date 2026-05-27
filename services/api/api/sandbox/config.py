@@ -71,9 +71,19 @@ def _sandbox_extra_env() -> list[tuple[str, str]]:
         name = str(item.get("name") or "").strip()
         if not name or "=" in name:
             continue
+        if name in _disabled_infra_secret_names():
+            continue
         value = item.get("value")
         extra.append((name, "" if value is None else str(value)))
     return extra
+
+
+def _disabled_infra_secret_names() -> set[str]:
+    return {
+        item.strip()
+        for item in os.getenv("CENTAUR_DISABLED_INFRA_SECRETS", "").split(",")
+        if item.strip()
+    }
 
 
 def amp_mode() -> str:
@@ -102,8 +112,8 @@ def container_env(
     firewall_host: str,
     *,
     trace_id: str | None = None,
-    resume_thread_id: str | None = None,
     pg_dsns: dict[str, str] | None = None,
+    omit_openai_api_key: bool = False,
 ) -> list[str]:
     """Build env vars for sandbox pods.
 
@@ -125,8 +135,6 @@ def container_env(
     visibility = amp_thread_visibility()
     if visibility:
         env.append(f"AMP_THREAD_VISIBILITY={visibility}")
-    if resume_thread_id:
-        env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
 
     no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
     api_host = urlsplit(api_url).hostname
@@ -136,7 +144,12 @@ def container_env(
     # Placeholder values for harness infra secrets. iron-proxy MITMs the
     # outbound TLS connection and rewrites these strings in auth headers
     # before they reach the real upstream.
+    disabled_infra_secret_names = _disabled_infra_secret_names()
     for key in _HARNESS_STUB_KEYS:
+        if key in disabled_infra_secret_names:
+            continue
+        if omit_openai_api_key and key == "OPENAI_API_KEY":
+            continue
         env.append(f"{key}={key}")
     for key in _SANDBOX_PASSTHROUGH_ENV_KEYS:
         value = (os.getenv(key) or "").strip()
@@ -168,6 +181,23 @@ def container_env(
         _set_env(env, name, value)
 
     return env
+
+
+def harness_resume_env(engine: str, resume_thread_id: str | None) -> list[str]:
+    """Return harness-specific cold-start resume env vars.
+
+    Resume identifiers are not portable across harnesses. Codex app-server
+    resume is intentionally omitted here because cold sandboxes do not have
+    durable Codex thread state to resume from yet.
+    """
+    resume = (resume_thread_id or "").strip()
+    if not resume:
+        return []
+    if engine == "amp":
+        return [f"AMP_CONTINUE_THREAD_ID={resume}"]
+    if engine == "claude-code":
+        return [f"CLAUDE_CONTINUE_SESSION_ID={resume}"]
+    return []
 
 
 def runtime_for_session(session: SandboxSession):
