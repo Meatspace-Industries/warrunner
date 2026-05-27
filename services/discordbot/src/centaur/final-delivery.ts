@@ -13,7 +13,7 @@ const CONSUMER_ID = `discordbot-${process.pid}`
 const FINAL_DELIVERY_CHUNK_CHARS = 1900
 const DISCORD_USER_ID_RE = /^\d{1,32}$/
 const DISCORD_USER_MENTION_RE = /<@!?(\d{1,32})>/g
-const ALIAS_MENTION_RE = /(^|[^\w<])@([A-Za-z][A-Za-z0-9_.-]{0,63})\b/g
+const ALIAS_MENTION_RE = /(^|[\s([{"'])@([A-Za-z][A-Za-z0-9_.-]{0,63})\b/g
 const NON_RETRYABLE_DISCORD_ERRORS = new Set([
   'missing_discord_delivery_target',
   'discord_forbidden',
@@ -137,13 +137,13 @@ async function deliver(
   if (!target.channelId) throw new Error('missing_discord_delivery_target')
   const payload = delivery.final_payload ?? {}
   const text = extractText(payload)
-  const chunks = splitFinalDeliveryText(text)
+  const prepared = prepareDiscordMessage(text, payload, config)
+  const chunks = splitFinalDeliveryText(prepared.content)
   const messages: DiscordMessage[] = []
   for (const [index, chunk] of chunks.entries()) {
-    const prepared = prepareDiscordMessage(chunk, payload, config)
     const body: DiscordCreateMessageBody = {
-      content: prepared.content,
-      allowed_mentions: prepared.allowedMentions
+      content: chunk,
+      allowed_mentions: allowedMentionsForContent(chunk, prepared.allowedMentionUserIds)
     }
     const reference = index === 0 ? messageReferenceFromTarget(target) : undefined
     if (reference) body.message_reference = reference
@@ -223,7 +223,7 @@ function prepareDiscordMessage(
   content: string,
   payload: any,
   config: AppConfig
-): { content: string; allowedMentions: DiscordAllowedMentions } {
+): { content: string; allowedMentionUserIds: string[] } {
   const payloadAllowedUsers = sanitizedAllowedMentionUserIds(payload)
   const allowedUsers = new Set(payloadAllowedUsers)
   const aliases = mentionUserAliases(config)
@@ -244,8 +244,16 @@ function prepareDiscordMessage(
 
   return {
     content: rewritten,
-    allowedMentions: allowedMentionsFromUserIds([...allowedUsers])
+    allowedMentionUserIds: [...allowedUsers]
   }
+}
+
+function allowedMentionsForContent(
+  content: string,
+  allowedMentionUserIds: string[]
+): DiscordAllowedMentions {
+  const allowed = new Set(allowedMentionUserIds)
+  return allowedMentionsFromUserIds(rawMentionUserIds(content).filter(userId => allowed.has(userId)))
 }
 
 function allowedMentionsFromUserIds(userIds: unknown[]): DiscordAllowedMentions {

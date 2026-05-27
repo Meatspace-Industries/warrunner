@@ -178,6 +178,18 @@ def test_discord_reminder_request_parser_rejects_malformed_time() -> None:
     assert getattr(exc.value, "code", "") == "UNSUPPORTED_REMINDER_TIME"
 
 
+def test_discord_reminder_request_parser_rejects_unsupported_month_unit() -> None:
+    workflow = _load_warrunner_discord_workflow()
+
+    with pytest.raises(Exception) as exc:
+        workflow._extract_reminder_request(
+            [{"type": "text", "text": "remind me in 1 month to renew this"}],
+            now=dt.datetime(2026, 5, 27, 12, 30, tzinfo=dt.timezone.utc),
+        )
+
+    assert getattr(exc.value, "code", "") == "UNSUPPORTED_REMINDER_TIME"
+
+
 @pytest.mark.asyncio
 async def test_discord_workflow_passes_selected_repo_to_agent_turn(monkeypatch) -> None:
     _configure_repo_routing(monkeypatch)

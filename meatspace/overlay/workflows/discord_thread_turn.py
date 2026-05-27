@@ -47,7 +47,7 @@ _REMINDER_DURATION_RE = re.compile(
     r"\bin\s+(?P<duration>"
     r"(?:\d+(?:\.\d+)?\s*"
     r"(?:weeks?|w|days?|d|hours?|hrs?|hr|h|minutes?|mins?|min|m|"
-    r"seconds?|secs?|sec|s)\s*){1,4})",
+    r"seconds?|secs?|sec|s)(?![A-Za-z])\s*){1,4})",
     re.IGNORECASE,
 )
 _REMINDER_TOMORROW_RE = re.compile(r"\btomorrow\b", re.IGNORECASE)
@@ -63,7 +63,7 @@ _REMINDER_ABSOLUTE_RE = re.compile(
 _REMINDER_COMPONENT_RE = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*"
     r"(?P<unit>weeks?|w|days?|d|hours?|hrs?|hr|h|minutes?|mins?|min|m|"
-    r"seconds?|secs?|sec|s)",
+    r"seconds?|secs?|sec|s)(?![A-Za-z])",
     re.IGNORECASE,
 )
 _REMINDER_POLITENESS_RE = re.compile(
