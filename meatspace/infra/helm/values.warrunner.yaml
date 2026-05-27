@@ -5,6 +5,8 @@
 api:
   executionWorkerEnabled: true
   workflowWorkerEnabled: true
+  # GitHub App installation tokens are short-lived; avoid aging them in idle pods.
+  warmPoolEnabled: false
   slackEtlEnabled: false
   discordEtlEnabled: true
   discordEtlPermissionMode: category_default
@@ -17,8 +19,18 @@ api:
   extraEnv:
     CENTAUR_DEPLOYMENT_NAME: warrunner
     CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY
+    CENTAUR_REQUIRE_GITHUB_APP_AUTH: "true"
+    # Keep repo-scoped turns below the GitHub App token lifetime, leaving room
+    # for proxy/pod readiness waits and a safety buffer.
+    GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S: "2400"
+    GITHUB_APP_REPO_SESSION_REFRESH_MARGIN_S: "2700"
     # Cold GKE nodes can take longer than Centaur's 60s default to pull the agent image.
     KUBERNETES_SANDBOX_READY_TIMEOUT_S: "300"
+    WARRUNNER_ALLOWED_GITHUB_REPOS: Meatspace-Industries/dappios,Meatspace-Industries/dapp-backend,Meatspace-Industries/dappweb
+    WARRUNNER_GITHUB_REPO_ALIASES: dappios=Meatspace-Industries/dappios,dapp-ios=Meatspace-Industries/dappios,ios=Meatspace-Industries/dappios,dapp-backend=Meatspace-Industries/dapp-backend,backend=Meatspace-Industries/dapp-backend,dappweb=Meatspace-Industries/dappweb,dapp-web=Meatspace-Industries/dappweb,web=Meatspace-Industries/dappweb
+
+ironProxy:
+  secretSource: env
 
 slackbot:
   enabled: false

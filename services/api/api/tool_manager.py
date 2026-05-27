@@ -1629,6 +1629,12 @@ class ToolManager:
             match_headers=("Authorization",),
         ),
         HttpSecret(
+            name="GITHUB_BASIC_AUTH",
+            secret_ref="GITHUB_BASIC_AUTH",
+            hosts=("github.com",),
+            match_headers=("Authorization",),
+        ),
+        HttpSecret(
             name="SLACK_BOT_TOKEN",
             secret_ref="SLACK_BOT_TOKEN",
             hosts=("*.slack.com",),

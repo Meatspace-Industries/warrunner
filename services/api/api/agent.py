@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import os
 import time
@@ -93,6 +94,23 @@ SUSPENDED_RETENTION_S = int(os.getenv("SUSPENDED_RETENTION_S", str(7 * 24 * 60 *
 MAX_ACTIVE_SANDBOX_SESSIONS = int(os.getenv("MAX_ACTIVE_SANDBOX_SESSIONS", "45"))
 STREAM_EOF_REATTACH_MAX = int(os.getenv("STREAM_EOF_REATTACH_MAX", "6"))
 STREAM_EOF_REATTACH_BACKOFF_S = float(os.getenv("STREAM_EOF_REATTACH_BACKOFF_S", "1.0"))
+GITHUB_APP_REPO_SESSION_MAX_AGE_S = max(
+    int(os.getenv("GITHUB_APP_REPO_SESSION_MAX_AGE_S", "2700")),
+    0,
+)
+_GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S = max(
+    int(os.getenv("GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S", "2400")),
+    0,
+)
+GITHUB_APP_REPO_SESSION_REFRESH_MARGIN_S = max(
+    int(
+        os.getenv(
+            "GITHUB_APP_REPO_SESSION_REFRESH_MARGIN_S",
+            str(_GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S + 300),
+        )
+    ),
+    0,
+)
 
 # ── Process-local runtime state (ephemeral: stream handles, turn counters) ───
 
@@ -121,6 +139,29 @@ def _elapsed_since(start_s: float) -> float:
     if elapsed_s >= 0:
         return round(elapsed_s, 2)
     return round(max(time.time() - start_s, 0.0), 2)
+
+
+def _repo_session_token_is_stale(session: SandboxSession) -> bool:
+    if not session.repo:
+        return False
+    now = time.time()
+    if session.github_token_expires_at > 0:
+        return now + GITHUB_APP_REPO_SESSION_REFRESH_MARGIN_S >= (
+            session.github_token_expires_at
+        )
+    if GITHUB_APP_REPO_SESSION_MAX_AGE_S <= 0:
+        return False
+    if session.started_at <= 0:
+        return True
+    return (now - session.started_at) >= GITHUB_APP_REPO_SESSION_MAX_AGE_S
+
+
+def _timestamp_from_epoch(value: float) -> dt.datetime | None:
+    return (
+        dt.datetime.fromtimestamp(value, dt.timezone.utc)
+        if value > 0
+        else None
+    )
 
 
 def _turn_input_metrics(turn_input: dict[str, Any]) -> dict[str, Any]:
@@ -188,7 +229,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
     row = await pool.fetchrow(
         "SELECT thread_key, sandbox_id, harness, engine, state, started_at, "
         "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
-        "inflight_attempts, last_result, trace_id "
+        "inflight_attempts, last_result, trace_id, repo, github_token_expires_at "
         "FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
@@ -209,6 +250,12 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
         inflight_attempts=int(row["inflight_attempts"] or 0),
         last_result=row["last_result"] or "",
         trace_id=str(row["trace_id"] or ""),
+        repo=row["repo"] or "",
+        github_token_expires_at=(
+            row["github_token_expires_at"].timestamp()
+            if row["github_token_expires_at"]
+            else 0.0
+        ),
     )
     rt = _get_runtime(session.sandbox_id)
     if session.inflight_turn_id and rt.turn_counter == 0:
@@ -229,6 +276,7 @@ async def _db_insert_session(
     inflight_turn_input: dict | None = None,
     inflight_attempts: int = 0,
     last_result: str = "",
+    repo: str = "",
 ) -> bool:
     """Insert a session row. Returns True if we won the insert race."""
     pool = _get_pool()
@@ -243,10 +291,11 @@ async def _db_insert_session(
         "INSERT INTO sandbox_sessions ("
         "thread_key, sandbox_id, harness, engine, state, started_at, "
         "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
-        "inflight_started_at, inflight_attempts, last_result, last_result_at, trace_id"
+        "inflight_started_at, inflight_attempts, last_result, last_result_at, "
+        "trace_id, repo, github_token_expires_at"
         ") VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8::text, $9::jsonb, "
         "CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END, $10, $11, "
-        "CASE WHEN $11::text = '' THEN NULL ELSE NOW() END, $12::uuid) "
+        "CASE WHEN $11::text = '' THEN NULL ELSE NOW() END, $12::uuid, $13, $14) "
         "ON CONFLICT (thread_key) DO NOTHING "
         "RETURNING thread_key",
         session.thread_key,
@@ -261,6 +310,8 @@ async def _db_insert_session(
         max(0, inflight_attempts),
         last_result,
         trace_id,
+        repo or None,
+        _timestamp_from_epoch(session.github_token_expires_at),
     )
     return row is not None
 
@@ -616,6 +667,7 @@ async def get_or_spawn(
     *,
     engine: str | None = None,
     persona: str | None = None,
+    repo: str | None = None,
 ) -> SandboxSession:
     """Get existing session or spawn a new sandbox.
 
@@ -629,33 +681,60 @@ async def get_or_spawn(
     old_inflight_attempts: int = 0
     old_last_result: str = ""
     old_trace_id: str = ""
+    requested_repo = (repo or "").strip() or None
+    repo_scope_changed = False
     session = await _db_get_session(thread_key)
     if session:
+        repo_scope_changed = bool(
+            requested_repo and (session.repo or None) != requested_repo
+        )
         if session.db_state in _REUSABLE_DB_STATES:
             backend = get_backend()
             st = await backend.status(session)
             if st == "running":
-                _get_runtime(session.sandbox_id)
-                return session
+                if repo_scope_changed:
+                    log.info(
+                        "session_repo_scope_changed",
+                        thread_key=thread_key,
+                        sandbox=session.sandbox_id[:12],
+                        old_repo=session.repo or None,
+                        new_repo=requested_repo,
+                    )
+                    await backend.stop(session)
+                    repo_scope_changed = True
+                elif _repo_session_token_is_stale(session):
+                    log.info(
+                        "session_repo_token_stale",
+                        thread_key=thread_key,
+                        sandbox=session.sandbox_id[:12],
+                        repo=session.repo or None,
+                        max_age_s=GITHUB_APP_REPO_SESSION_MAX_AGE_S,
+                    )
+                    await backend.stop(session)
+                else:
+                    _get_runtime(session.sandbox_id)
+                    return session
             # Container is gone — save agent_thread_id and cursor for resume, clean up row
-            old_agent_thread_id = session.agent_thread_id
-            old_last_delivered_id = session.last_delivered_id
-            old_inflight_turn_id = session.inflight_turn_id
-            old_inflight_turn_input = session.inflight_turn_input
-            old_inflight_attempts = session.inflight_attempts
-            old_last_result = session.last_result
-            old_trace_id = session.trace_id
+            if not repo_scope_changed:
+                old_agent_thread_id = session.agent_thread_id
+                old_last_delivered_id = session.last_delivered_id
+                old_inflight_turn_id = session.inflight_turn_id
+                old_inflight_turn_input = session.inflight_turn_input
+                old_inflight_attempts = session.inflight_attempts
+                old_last_result = session.last_result
+                old_trace_id = session.trace_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
         else:
             # state is stopped/gone — clean up stale row
-            old_agent_thread_id = session.agent_thread_id
-            old_last_delivered_id = session.last_delivered_id
-            old_inflight_turn_id = session.inflight_turn_id
-            old_inflight_turn_input = session.inflight_turn_input
-            old_inflight_attempts = session.inflight_attempts
-            old_last_result = session.last_result
-            old_trace_id = session.trace_id
+            if not repo_scope_changed:
+                old_agent_thread_id = session.agent_thread_id
+                old_last_delivered_id = session.last_delivered_id
+                old_inflight_turn_id = session.inflight_turn_id
+                old_inflight_turn_input = session.inflight_turn_input
+                old_inflight_attempts = session.inflight_attempts
+                old_last_result = session.last_result
+                old_trace_id = session.trace_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
 
@@ -663,9 +742,10 @@ async def get_or_spawn(
     thread_trace_id = await get_or_create_thread_trace_id(pool, thread_key)
 
     # Resolve harness profile (engine, persona, repo) once for both warm and cold paths
-    resolved_engine, resolved_persona, repo = _resolve_harness_profile(
+    resolved_engine, resolved_persona, default_repo = _resolve_harness_profile(
         harness, persona=persona, engine_override=engine
     )
+    resolved_repo = requested_repo or default_repo
 
     # Try warm pool first
     should_try_warm = (
@@ -679,7 +759,11 @@ async def get_or_spawn(
 
         trace_id = old_trace_id or thread_trace_id or str(uuid.uuid4())
         claimed = await claim_container(
-            thread_key, harness, persona=resolved_persona, repo=repo, trace_id=trace_id
+            thread_key,
+            harness,
+            persona=resolved_persona,
+            repo=resolved_repo,
+            trace_id=trace_id,
         )
         if claimed:
             if old_agent_thread_id:
@@ -694,15 +778,18 @@ async def get_or_spawn(
                 inflight_turn_input=old_inflight_turn_input,
                 inflight_attempts=old_inflight_attempts,
                 last_result=old_last_result,
+                repo=resolved_repo or "",
             )
             if won:
+                claimed.repo = resolved_repo or ""
                 _get_runtime(claimed.sandbox_id)
                 return claimed
 
     # Cold spawn
-    resolved_engine, resolved_persona, repo = _resolve_harness_profile(
+    resolved_engine, resolved_persona, default_repo = _resolve_harness_profile(
         harness, persona=persona, engine_override=engine
     )
+    resolved_repo = requested_repo or default_repo
     backend = get_backend()
     await _evict_idle_sessions_for_capacity(backend)
     trace_id = old_trace_id or thread_trace_id or str(uuid.uuid4())
@@ -711,11 +798,12 @@ async def get_or_spawn(
         harness,
         resolved_engine,
         persona=resolved_persona,
-        repo=repo,
+        repo=resolved_repo,
         resume_thread_id=old_agent_thread_id or None,
         trace_id=trace_id,
     )
     session.trace_id = trace_id
+    session.repo = resolved_repo or ""
     if old_agent_thread_id:
         session.agent_thread_id = old_agent_thread_id
     _get_runtime(session.sandbox_id)
@@ -734,6 +822,7 @@ async def get_or_spawn(
         inflight_turn_input=old_inflight_turn_input,
         inflight_attempts=old_inflight_attempts,
         last_result=old_last_result,
+        repo=resolved_repo or "",
     )
     if not won:
         log.warning(

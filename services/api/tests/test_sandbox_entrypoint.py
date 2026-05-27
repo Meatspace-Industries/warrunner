@@ -171,6 +171,36 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
     assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
 
 
+def test_sandbox_entrypoint_configures_proxy_rewritable_github_auth(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            "git config --global --get-all http.https://github.com/.extraheader; "
+            'test ! -f "$HOME/.git-credentials"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "GITHUB_TOKEN": "GITHUB_TOKEN",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert result.stdout.strip() == "Authorization: Basic GITHUB_BASIC_AUTH"
+
+
 def test_sandbox_entrypoint_installs_mounted_codex_auth_json(tmp_path: Path) -> None:
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)

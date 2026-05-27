@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -31,6 +32,11 @@ import structlog
 from api.proxy_config import (
     assign_pg_listen_ports,
     render_proxy_yaml,
+)
+from api.github_app import (
+    github_app_auth_required,
+    github_app_config_from_env,
+    mint_github_app_installation_token_details,
 )
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
@@ -62,6 +68,11 @@ _CODEX_AUTH_MOUNT_DIR = "/home/agent/codex-auth"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
+ProxySecretOverrides = dict[str, tuple[str, str]]
+_GITHUB_TOKEN_REPOSITORY_REQUIRED = "github-app-repository-scope-required"
+_GITHUB_BASIC_AUTH_REPOSITORY_REQUIRED = (
+    "github-app-basic-auth-repository-scope-required"
+)
 
 
 def _get_rt(session: SandboxSession):
@@ -159,8 +170,45 @@ def _disabled_secret_refs() -> set[str]:
     }
 
 
+def _secret_source_kind() -> str:
+    return os.getenv("FIREWALL_MANAGER_SECRET_SOURCE", "env").strip().lower()
+
+
+def _secret_uses_ref(secret: SecretDef, secret_ref: str) -> bool:
+    if isinstance(secret, (HttpSecret, GcpAuthSecret, PgDsnSecret)):
+        return secret.secret_ref == secret_ref
+    if isinstance(secret, OAuthTokenSecret):
+        return any(source.secret_ref == secret_ref for _, source in secret.fields) or any(
+            source.secret_ref == secret_ref
+            for _, source in secret.token_endpoint_headers
+        )
+    if isinstance(secret, HmacSignSecret):
+        return any(source.secret_ref == secret_ref for _, source in secret.credentials)
+    return False
+
+
+def _secrets_without_ref(secrets: list[SecretDef], secret_ref: str) -> list[SecretDef]:
+    return [secret for secret in secrets if not _secret_uses_ref(secret, secret_ref)]
+
+
+def _validate_github_app_secret_source(secrets: list[SecretDef]) -> None:
+    if (
+        github_app_auth_required()
+        and any(
+            _secret_uses_ref(secret, "GITHUB_TOKEN")
+            or _secret_uses_ref(secret, "GITHUB_BASIC_AUTH")
+            for secret in secrets
+        )
+        and _secret_source_kind() != "env"
+    ):
+        raise ValueError(
+            "GitHub App auth requires FIREWALL_MANAGER_SECRET_SOURCE=env "
+            "when GitHub proxy secrets are configured"
+        )
+
+
 def _proxy_secret_refs_for_env(secrets: list[SecretDef]) -> list[str]:
-    if os.getenv("FIREWALL_MANAGER_SECRET_SOURCE", "env").strip().lower() != "env":
+    if _secret_source_kind() != "env":
         return []
 
     refs: set[str] = set()
@@ -176,17 +224,23 @@ def _proxy_secret_refs_for_env(secrets: list[SecretDef]) -> list[str]:
     return sorted(ref for ref in refs if ref not in _disabled_secret_refs())
 
 
-def _secret_ref_env(secret_name: str, secret_ref: str) -> dict[str, Any]:
+def _secret_ref_env(
+    secret_name: str,
+    secret_ref: str,
+    *,
+    key: str | None = None,
+    optional: bool = True,
+) -> dict[str, Any]:
     return {
         "name": secret_ref,
         "valueFrom": {
             "secretKeyRef": {
                 "name": secret_name,
-                "key": _secret_env_key(secret_ref),
+                "key": key or _secret_env_key(secret_ref),
                 # Individual tool credentials should not block the shared
                 # proxy pod from starting. Tools that need a missing secret
                 # will fail at call time; the control plane should still boot.
-                "optional": True,
+                "optional": optional,
             }
         },
     }
@@ -196,6 +250,7 @@ def _proxy_iron_env(
     secret_name: str,
     secrets: list[SecretDef],
     pg_secrets: list[tuple[PgDsnSecret, str]],
+    secret_overrides: ProxySecretOverrides | None = None,
 ) -> list[dict[str, Any]]:
     """Env block for the iron-proxy container.
 
@@ -237,8 +292,20 @@ def _proxy_iron_env(
         env.append(
             {"name": f"PG_PROXY_PASSWORD_{secret.name}", "value": proxy_password}
         )
+    overrides = secret_overrides or {}
     for secret_ref in _proxy_secret_refs_for_env(secrets):
-        env.append(_secret_ref_env(secret_name, secret_ref))
+        if secret_ref in overrides:
+            override_secret_name, override_key = overrides[secret_ref]
+            env.append(
+                _secret_ref_env(
+                    override_secret_name,
+                    secret_ref,
+                    key=override_key,
+                    optional=False,
+                )
+            )
+        else:
+            env.append(_secret_ref_env(secret_name, secret_ref))
     return env
 
 
@@ -656,8 +723,15 @@ class KubernetesExecutorBackend(SandboxBackend):
         )
 
     async def _create_prompt_secret(
-        self, secret_name: str, persona: str | None
+        self,
+        secret_name: str,
+        persona: str | None,
+        extra_string_data: dict[str, str] | None = None,
     ) -> None:
+        string_data = {
+            "AGENTS_BASE.md": _prompt_bundle(persona),
+            **(extra_string_data or {}),
+        }
         await self._delete_prompt_secret(secret_name)
         await self._core_api().create_namespaced_secret(
             _namespace(),
@@ -671,9 +745,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                     },
                 },
                 "type": "Opaque",
-                "stringData": {
-                    "AGENTS_BASE.md": _prompt_bundle(persona),
-                },
+                "stringData": string_data,
             },
         )
 
@@ -842,6 +914,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         pg_listen_ports: dict[str, int],
         *,
         restart_policy: str,
+        secret_overrides: ProxySecretOverrides | None = None,
     ) -> dict[str, Any]:
         """Return the pod.spec dict shared by the sandbox bare Pod and the api-self Deployment."""
         configmap_name = _proxy_configmap_name(sandbox_id)
@@ -875,7 +948,12 @@ class KubernetesExecutorBackend(SandboxBackend):
                     "name": "iron-proxy",
                     "image": _proxy_image(),
                     "imagePullPolicy": _proxy_image_pull_policy(),
-                    "env": _proxy_iron_env(secret_name, secrets, pg_secrets),
+                    "env": _proxy_iron_env(
+                        secret_name,
+                        secrets,
+                        pg_secrets,
+                        secret_overrides,
+                    ),
                     "envFrom": env_from,
                     "ports": proxy_ports,
                     "readinessProbe": {
@@ -944,6 +1022,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         secrets: list[SecretDef],
         pg_secrets: list[tuple[PgDsnSecret, str]],
         pg_listen_ports: dict[str, int],
+        secret_overrides: ProxySecretOverrides | None = None,
     ) -> str:
         proxy_pod_name = _new_proxy_pod_name(sandbox_id)
         spec = self._build_proxy_pod_spec(
@@ -952,6 +1031,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             pg_secrets,
             pg_listen_ports,
             restart_policy="Never",
+            secret_overrides=secret_overrides,
         )
         await self._core_api().create_namespaced_pod(
             _namespace(),
@@ -1093,8 +1173,6 @@ class KubernetesExecutorBackend(SandboxBackend):
         await self._ensure_clients()
 
         repos_path = _repos_path()
-        if repo and not repos_path:
-            raise ValueError("REPOS_PATH is required when AGENT_REPO is set")
 
         runtime_key = f"{thread_key}:{uuid.uuid4().hex[:8]}"
         pod_name = _resource_name("centaur-centaur-sandbox", runtime_key)
@@ -1102,6 +1180,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         firewall_host = _proxy_service_name(pod_name)
 
         secrets = self._collect_secrets()
+        _validate_github_app_secret_source(secrets)
         pg_listen_ports = assign_pg_listen_ports(secrets)
         pg_secrets = self._resolved_pg_secrets(secrets)
         sandbox_pg_dsns = {
@@ -1168,7 +1247,10 @@ class KubernetesExecutorBackend(SandboxBackend):
             },
             {
                 "name": "prompt-bundle",
-                "secret": {"secretName": secret_name},
+                "secret": {
+                    "secretName": secret_name,
+                    "items": [{"key": "AGENTS_BASE.md", "path": "AGENTS_BASE.md"}],
+                },
             },
         ]
         init_containers: list[dict[str, Any]] = []
@@ -1255,7 +1337,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                     "name": "repos",
                     "hostPath": {
                         "path": repos_path,
-                        "type": "Directory",
+                        "type": "DirectoryOrCreate",
                     },
                 }
             )
@@ -1322,13 +1404,74 @@ class KubernetesExecutorBackend(SandboxBackend):
 
         await self._delete_pod(pod_name)
         await self._delete_proxy_resources(pod_name)
+        github_token_expires_at = 0.0
         try:
-            await self._create_prompt_secret(secret_name, persona)
+            prompt_secret_data: dict[str, str] = {}
+            proxy_secret_overrides: ProxySecretOverrides = {}
+            proxy_secret_refs = set(_proxy_secret_refs_for_env(secrets))
+            if "GITHUB_TOKEN" in proxy_secret_refs:
+                repo_scope = (repo or "").strip()
+                if repo_scope:
+                    github_app_details = (
+                        await mint_github_app_installation_token_details(
+                            repository=repo_scope,
+                            require_repository=True,
+                        )
+                    )
+                    github_app_token = (
+                        github_app_details.token if github_app_details else ""
+                    )
+                    if github_app_details and github_app_details.expires_at:
+                        github_token_expires_at = (
+                            github_app_details.expires_at.timestamp()
+                        )
+                    if github_app_token:
+                        prompt_secret_data["GITHUB_TOKEN"] = github_app_token
+                        proxy_secret_overrides["GITHUB_TOKEN"] = (
+                            secret_name,
+                            "GITHUB_TOKEN",
+                        )
+                        if "GITHUB_BASIC_AUTH" in proxy_secret_refs:
+                            prompt_secret_data["GITHUB_BASIC_AUTH"] = (
+                                base64.b64encode(
+                                    f"x-access-token:{github_app_token}".encode()
+                                ).decode()
+                            )
+                            proxy_secret_overrides["GITHUB_BASIC_AUTH"] = (
+                                secret_name,
+                                "GITHUB_BASIC_AUTH",
+                            )
+                elif github_app_config_from_env() is not None:
+                    prompt_secret_data["GITHUB_TOKEN"] = (
+                        _GITHUB_TOKEN_REPOSITORY_REQUIRED
+                    )
+                    proxy_secret_overrides["GITHUB_TOKEN"] = (
+                        secret_name,
+                        "GITHUB_TOKEN",
+                    )
+                    if "GITHUB_BASIC_AUTH" in proxy_secret_refs:
+                        prompt_secret_data["GITHUB_BASIC_AUTH"] = (
+                            _GITHUB_BASIC_AUTH_REPOSITORY_REQUIRED
+                        )
+                        proxy_secret_overrides["GITHUB_BASIC_AUTH"] = (
+                            secret_name,
+                            "GITHUB_BASIC_AUTH",
+                        )
+
+            await self._create_prompt_secret(
+                secret_name,
+                persona,
+                extra_string_data=prompt_secret_data,
+            )
             await self._create_proxy_configmap(pod_name, secrets, pg_listen_ports)
             await self._create_proxy_service(pod_name, pg_listen_ports)
             await self._create_proxy_network_policies(pod_name, pg_listen_ports)
             proxy_pod_name = await self._create_proxy_pod(
-                pod_name, secrets, pg_secrets, pg_listen_ports
+                pod_name,
+                secrets,
+                pg_secrets,
+                pg_listen_ports,
+                proxy_secret_overrides,
             )
             await self._wait_pod_ready(proxy_pod_name)
             await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
@@ -1354,6 +1497,8 @@ class KubernetesExecutorBackend(SandboxBackend):
             started_at=time.time(),
             backend_name=self.name,
             trace_id=trace_id or "",
+            repo=repo or "",
+            github_token_expires_at=github_token_expires_at,
         )
         log.info(
             "sandbox_spawned",
@@ -1361,6 +1506,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             sandbox=pod_name,
             harness=harness,
             engine=engine,
+            repo=repo or None,
             warm=warm,
             backend=self.name,
             per_sandbox_proxy=True,
@@ -1679,7 +1825,12 @@ class KubernetesExecutorBackend(SandboxBackend):
         Deployment performs a zero-downtime rolling restart.
         """
         await self._ensure_clients()
-        secrets = self._collect_secrets()
+        all_secrets = self._collect_secrets()
+        _validate_github_app_secret_source(all_secrets)
+        secrets = _secrets_without_ref(
+            _secrets_without_ref(all_secrets, "GITHUB_TOKEN"),
+            "GITHUB_BASIC_AUTH",
+        )
         pg_listen_ports = assign_pg_listen_ports(secrets)
         pg_secrets = self._resolved_pg_secrets(secrets)
         rendered = render_proxy_yaml(secrets, pg_listen_ports=pg_listen_ports)

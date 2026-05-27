@@ -148,6 +148,21 @@ describe('normalizeDiscordMessage', () => {
     expect(normalized?.discord.is_mention).toBe(true)
   })
 
+  it('rejects bot-mentioned messages outside configured routes when not in a thread', () => {
+    const config = loadConfig(env())
+    expect(
+      normalizeDiscordMessage({
+        message: message({
+          id: 'outside-channel-msg-1',
+          channel_id: 'random-channel',
+          content: '<@999> not from a thread',
+          mentions: [{ id: '999' }]
+        }),
+        config
+      })
+    ).toBeNull()
+  })
+
   it('rejects raw mention-looking text outside configured routes without a parsed Discord mention', () => {
     const config = loadConfig(env())
     expect(
@@ -164,7 +179,7 @@ describe('normalizeDiscordMessage', () => {
     ).toBeNull()
   })
 
-  it('accepts bot-mentioned messages when no route config exists', () => {
+  it('accepts bot-mentioned thread messages when no route config exists', () => {
     const config = loadConfig(
       env({
         WARRUNNER_HOME_FORUM_CHANNEL_ID: '',

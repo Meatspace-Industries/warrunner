@@ -66,6 +66,7 @@ class ExecuteRequest(BaseModel):
     engine: str | None = None
     platform: str | None = None
     user_id: str | None = None
+    repo: str | None = None
     options: dict | None = None
 
 

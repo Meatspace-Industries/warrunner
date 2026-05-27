@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
+from api.github_repos import (
+    configured_github_repo_aliases,
+    configured_github_repo_list,
+    resolve_github_repo_alias,
+)
 from api.runtime_control import ControlPlaneError
 from api.workflow_engine import WorkflowContext
 
@@ -18,6 +23,11 @@ _PROMPT_FLAG_ALIASES = {
 }
 _PROMPT_FLAG_SKIP = frozenset({"engine", "model", "opus", "sonnet", "haiku"})
 _PROMPT_FLAG_VALUE_SKIP = frozenset({"engine", "model"})
+_REPO_FLAG_RE = re.compile(
+    r"(^|\s)(`?)(?:--repo(?:=|\s+)|repo\s*[:=]\s*)"
+    r"([A-Za-z0-9_.:/-]+)(`?)",
+    re.IGNORECASE,
+)
 _PROMPT_FLAG_RE = re.compile(
     r"(^|\s)(`?)(--|[\u2013\u2014])([a-z][a-z0-9-]*)(?=\s|`|$)",
     re.IGNORECASE,
@@ -32,6 +42,8 @@ _BARE_PERSONA_PROMPT = (
 class PromptSelection:
     harness: str | None
     persona: str | None
+    repo: str | None
+    ambiguous_repos: tuple[str, ...]
     parts: list[dict[str, Any]]
 
 
@@ -48,6 +60,7 @@ class Input:
     harness: str | None = None
     persona: str | None = None
     agents_md_override: str | None = None
+    repo: str | None = None
 
     @property
     def effective_parts(self) -> list[dict[str, Any]]:
@@ -76,6 +89,120 @@ def _strip_ranges(text: str, ranges: list[tuple[int, int]]) -> str:
     for start, end in sorted(ranges, reverse=True):
         cleaned = f"{cleaned[:start]} {cleaned[end:]}"
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _extract_repo_selection_from_text(
+    text: str,
+    *,
+    aliases: dict[str, str],
+) -> tuple[str | None, tuple[str, ...], str]:
+    selected_repo: str | None = None
+    ranges: list[tuple[int, int]] = []
+
+    for match in _REPO_FLAG_RE.finditer(text):
+        leading = match.group(1) or ""
+        opening_tick = match.group(2) or ""
+        candidate = match.group(3) or ""
+        closing_tick = match.group(4) or ""
+        strip_start = match.start() + len(leading)
+        if opening_tick:
+            strip_start += len(opening_tick)
+        strip_end = match.end() - len(closing_tick)
+        resolved = resolve_github_repo_alias(candidate, aliases)
+        if resolved:
+            selected_repo = resolved
+            ranges.append((strip_start, strip_end))
+
+    cleaned = _strip_ranges(text, ranges) if ranges else text.strip()
+    if selected_repo:
+        return selected_repo, (), cleaned
+
+    mentioned: set[str] = set()
+    for alias, repo in aliases.items():
+        pattern = rf"(?<![A-Za-z0-9_.-]){re.escape(alias)}(?![A-Za-z0-9_.-])"
+        if re.search(pattern, cleaned, flags=re.IGNORECASE):
+            mentioned.add(repo)
+
+    if len(mentioned) == 1:
+        return next(iter(mentioned)), (), cleaned
+    if len(mentioned) > 1:
+        return None, tuple(sorted(mentioned)), cleaned
+    return None, (), cleaned
+
+
+def _parts_look_like_repo_work(parts: list[dict[str, Any]]) -> bool:
+    text = " ".join(
+        part.get("text", "")
+        for part in parts
+        if part.get("type") == "text" and isinstance(part.get("text"), str)
+    ).lower()
+    return bool(
+        re.search(
+            r"\b(code|repo|github|branch|pr|pull request|implement|fix|test|"
+            r"debug|deploy|diff|commit)\b",
+            text,
+        )
+    )
+
+
+def _with_repo_routing_note(
+    parts: list[dict[str, Any]],
+    *,
+    repo: str | None,
+    ambiguous_repos: tuple[str, ...],
+    configured_repos: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    note: str | None = None
+    if repo:
+        note = f"Target GitHub repository for this turn: {repo}."
+    elif ambiguous_repos:
+        note = (
+            "Multiple configured GitHub repositories were mentioned "
+            f"({', '.join(ambiguous_repos)}). Ask the user which one to use "
+            "before doing code work."
+        )
+    elif configured_repos and _parts_look_like_repo_work(parts):
+        note = (
+            "No target GitHub repository was selected. Ask the user to specify "
+            f"one of: {', '.join(configured_repos)} before doing code work."
+        )
+    if not note:
+        return parts
+    return [{"type": "text", "text": note}, *parts]
+
+
+async def _release_for_repo_scope_change(
+    ctx: WorkflowContext,
+    *,
+    thread_key: str,
+    message_id: str | None,
+    repo: str | None,
+) -> None:
+    if not repo or not hasattr(ctx, "_pool"):
+        return
+
+    from api.runtime_control import (
+        get_active_assignment,
+        release_assignment,
+        reset_sandbox_session_for_repo_scope_change,
+    )
+
+    active = await get_active_assignment(ctx._pool, thread_key)
+    if not active:
+        return
+    active_repo = (active.get("repo") or "").strip() or None
+    if active_repo == repo:
+        return
+
+    release_id = f"repo-switch:{message_id or ctx.run_id}"
+    await release_assignment(
+        ctx._pool,
+        thread_key=thread_key,
+        release_id=release_id,
+        cancel_inflight=True,
+        stop_runtime_background=True,
+    )
+    await reset_sandbox_session_for_repo_scope_change(ctx._pool, thread_key)
 
 
 def _extend_value_skip(text: str, end: int) -> int:
@@ -134,10 +261,14 @@ def _extract_prompt_selection(
     *,
     explicit_harness: str | None = None,
     explicit_persona: str | None = None,
+    explicit_repo: str | None = None,
 ) -> PromptSelection:
     known_personas = _known_personas()
+    repo_aliases = configured_github_repo_aliases()
     harness: str | None = None
     persona: str | None = None
+    repo: str | None = resolve_github_repo_alias(explicit_repo or "", repo_aliases)
+    ambiguous_repos: tuple[str, ...] = ()
     cleaned_parts: list[dict[str, Any]] = []
     has_non_text_part = False
 
@@ -147,8 +278,15 @@ def _extract_prompt_selection(
             has_non_text_part = True
             continue
 
-        part_harness, part_persona, cleaned_text = _extract_prompt_selection_from_text(
+        part_repo, part_ambiguous, repo_cleaned_text = _extract_repo_selection_from_text(
             part["text"],
+            aliases=repo_aliases,
+        )
+        repo = repo or part_repo
+        ambiguous_repos = ambiguous_repos or part_ambiguous
+
+        part_harness, part_persona, cleaned_text = _extract_prompt_selection_from_text(
+            repo_cleaned_text,
             personas=known_personas,
         )
         harness = part_harness or harness
@@ -165,8 +303,20 @@ def _extract_prompt_selection(
         cleaned_parts.append({"type": "text", "text": _BARE_PERSONA_PROMPT})
     if not cleaned_parts:
         cleaned_parts = parts
+    cleaned_parts = _with_repo_routing_note(
+        cleaned_parts,
+        repo=repo,
+        ambiguous_repos=ambiguous_repos,
+        configured_repos=configured_github_repo_list(repo_aliases),
+    )
 
-    return PromptSelection(harness=harness, persona=persona, parts=cleaned_parts)
+    return PromptSelection(
+        harness=harness,
+        persona=persona,
+        repo=repo,
+        ambiguous_repos=ambiguous_repos,
+        parts=cleaned_parts,
+    )
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
@@ -185,10 +335,18 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         inp.effective_parts,
         explicit_harness=inp.harness,
         explicit_persona=inp.persona,
+        explicit_repo=inp.repo,
     )
     metadata = dict(inp.metadata or {})
     metadata.setdefault("source", "discordbot")
     metadata.setdefault("platform", "discord")
+
+    await _release_for_repo_scope_change(
+        ctx,
+        thread_key=thread_key,
+        message_id=inp.message_id,
+        repo=selection.repo,
+    )
 
     return await do_agent_turn(
         ctx,
@@ -202,4 +360,5 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         harness=selection.harness,
         persona=selection.persona,
         agents_md_override=inp.agents_md_override,
+        repo=selection.repo,
     )

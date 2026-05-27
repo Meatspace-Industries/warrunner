@@ -130,6 +130,16 @@ require_secret_key() {
   fi
 }
 
+require_secret_one_key() {
+  local name="$1"
+  shift
+  if ! kubectl -n "$NAMESPACE" get secret "$name" -o json \
+    | python3 -c 'import json,sys; data=json.load(sys.stdin).get("data", {}); sys.exit(0 if any(k in data and data[k] for k in sys.argv[1:]) else 1)' "$@"; then
+    echo "FATAL: Kubernetes Secret $name is missing one of: $*" >&2
+    exit 1
+  fi
+}
+
 reject_secret_key() {
   local name="$1"
   local key="$2"
@@ -200,6 +210,22 @@ import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
+def require_env(name, value):
+    pattern = (
+        r"name:\s*" + re.escape(name) + r"\s*\n"
+        r"\s*value:\s*[\"']?" + re.escape(value) + r"[\"']?"
+    )
+    if not re.search(pattern, text):
+        raise SystemExit(
+            f"FATAL: rendered deployment is missing {name}={value}"
+        )
+
+require_env("FIREWALL_MANAGER_SECRET_SOURCE", "env")
+require_env("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "env")
+require_env("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "true")
+if re.search(r"name:\s*GITHUB_TOKEN\b", text):
+    raise SystemExit("FATAL: rendered deployment still injects GITHUB_TOKEN")
+
 if re.search(
     r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n\s*value:\s*.*OPENAI_API_KEY",
     text,
@@ -302,11 +328,15 @@ require_secret centaur-infra-env
 require_secret warrunner-codex-auth
 require_secret centaur-firewall-ca
 require_secret centaur-firewall-ca-key
-require_secret_key warrunner-codex-auth auth.json
 require_cmd python3
+require_secret_key centaur-infra-env GITHUB_APP_ID
+require_secret_key centaur-infra-env GITHUB_APP_INSTALLATION_ID
+require_secret_one_key centaur-infra-env GITHUB_APP_PRIVATE_KEY GITHUB_APP_PRIVATE_KEY_BASE64
+require_secret_key warrunner-codex-auth auth.json
 reject_secret_key centaur-infra-env OPENAI_API_KEY
+reject_secret_key centaur-infra-env GITHUB_TOKEN
 validate_codex_auth_secret warrunner-codex-auth auth.json
 
 kubectl create namespace "$EGRESS_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-helm upgrade --install "${helm_args[@]}"
+helm upgrade --install --force-conflicts "${helm_args[@]}"

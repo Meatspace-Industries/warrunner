@@ -10,6 +10,17 @@ CODEX_AUTH_SECRET_NAME="warrunner-codex-auth"
 FORCE=0
 CODEX_AUTH_ONLY=0
 CHECK_ONLY=0
+TMPDIRS_TO_CLEAN=()
+
+cleanup_tmpdirs() {
+  local dir
+  for dir in "${TMPDIRS_TO_CLEAN[@]}"; do
+    if [[ -n "$dir" ]]; then
+      rm -rf "$dir"
+    fi
+  done
+}
+trap cleanup_tmpdirs EXIT
 
 usage() {
   cat <<'EOF'
@@ -101,6 +112,16 @@ delete_if_forced() {
 
 apply_kubectl_yaml() {
   kubectl apply --server-side --field-manager=warrunner-bootstrap --force-conflicts -f - >/dev/null
+}
+
+add_secret_file_arg() {
+  local dir="$1"
+  local key="$2"
+  local value="$3"
+  local file="$dir/$key"
+  printf '%s' "$value" > "$file"
+  chmod 600 "$file"
+  secret_file_args+=(--from-file="$key=$file")
 }
 
 rand_hex() {
@@ -230,12 +251,22 @@ if [[ "$CODEX_AUTH_ONLY" != "1" ]]; then
 
   require_env_value DISCORD_BOT_TOKEN
   require_env_value DISCORD_GUILD_ID
+  require_env_value GITHUB_APP_ID
+  require_env_value GITHUB_APP_INSTALLATION_ID
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     echo "FATAL: OPENAI_API_KEY must not be set for Warrunner; use Codex ChatGPT login auth instead" >&2
     exit 1
   fi
   if [[ -z "${WARRUNNER_HOME_FORUM_CHANNEL_ID:-}" && -z "${WARRUNNER_HOME_CHANNEL_IDS:-}" ]]; then
     echo "FATAL: WARRUNNER_HOME_FORUM_CHANNEL_ID or WARRUNNER_HOME_CHANNEL_IDS is required in $ENV_FILE" >&2
+    exit 1
+  fi
+  if [[ -z "${GITHUB_APP_PRIVATE_KEY:-}" && -z "${GITHUB_APP_PRIVATE_KEY_BASE64:-}" && -z "${GITHUB_APP_PRIVATE_KEY_FILE:-}" ]]; then
+    echo "FATAL: GITHUB_APP_PRIVATE_KEY, GITHUB_APP_PRIVATE_KEY_BASE64, or GITHUB_APP_PRIVATE_KEY_FILE is required in $ENV_FILE" >&2
+    exit 1
+  fi
+  if [[ -n "${GITHUB_APP_PRIVATE_KEY_FILE:-}" && ! -r "${GITHUB_APP_PRIVATE_KEY_FILE:-}" ]]; then
+    echo "FATAL: GITHUB_APP_PRIVATE_KEY_FILE is not readable: $GITHUB_APP_PRIVATE_KEY_FILE" >&2
     exit 1
   fi
 fi
@@ -273,42 +304,60 @@ SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-$(existing_or_default SLACK_BOT_TOKEN "xoxb-
 LMNR_PROJECT_API_KEY="$(env_or_existing LMNR_PROJECT_API_KEY)"
 LMNR_BASE_URL="$(env_or_existing LMNR_BASE_URL)"
 
-secret_args=(
+SECRET_TMPDIR="$(mktemp -d)"
+TMPDIRS_TO_CLEAN+=("$SECRET_TMPDIR")
+secret_file_args=(
   -n "$NAMESPACE" create secret generic "$INFRA_SECRET_NAME"
-  --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
-  --from-literal=DATABASE_URL="$DATABASE_URL"
-  --from-literal=IRON_MANAGEMENT_API_KEY="$(existing_or_generated IRON_MANAGEMENT_API_KEY)"
-  --from-literal=SANDBOX_SIGNING_KEY="$(existing_or_generated SANDBOX_SIGNING_KEY)"
-  --from-literal=DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN"
-  --from-literal=DISCORDBOT_API_KEY="$DISCORDBOT_API_KEY"
-  --from-literal=SLACK_BOT_TOKEN="$SLACK_BOT_TOKEN"
-  --from-literal=SLACK_SIGNING_SECRET="$SLACK_SIGNING_SECRET"
-  --from-literal=SLACKBOT_API_KEY="$SLACKBOT_API_KEY"
-  --from-literal=LMNR_PROJECT_API_KEY="$LMNR_PROJECT_API_KEY"
-  --from-literal=LMNR_BASE_URL="$LMNR_BASE_URL"
   --dry-run=client -o yaml
 )
+add_secret_file_arg "$SECRET_TMPDIR" POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+add_secret_file_arg "$SECRET_TMPDIR" DATABASE_URL "$DATABASE_URL"
+add_secret_file_arg "$SECRET_TMPDIR" IRON_MANAGEMENT_API_KEY "$(existing_or_generated IRON_MANAGEMENT_API_KEY)"
+add_secret_file_arg "$SECRET_TMPDIR" SANDBOX_SIGNING_KEY "$(existing_or_generated SANDBOX_SIGNING_KEY)"
+add_secret_file_arg "$SECRET_TMPDIR" DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+add_secret_file_arg "$SECRET_TMPDIR" DISCORDBOT_API_KEY "$DISCORDBOT_API_KEY"
+add_secret_file_arg "$SECRET_TMPDIR" SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN"
+add_secret_file_arg "$SECRET_TMPDIR" SLACK_SIGNING_SECRET "$SLACK_SIGNING_SECRET"
+add_secret_file_arg "$SECRET_TMPDIR" SLACKBOT_API_KEY "$SLACKBOT_API_KEY"
+add_secret_file_arg "$SECRET_TMPDIR" LMNR_PROJECT_API_KEY "$LMNR_PROJECT_API_KEY"
+add_secret_file_arg "$SECRET_TMPDIR" LMNR_BASE_URL "$LMNR_BASE_URL"
 ANTHROPIC_API_KEY="$(env_or_existing ANTHROPIC_API_KEY)"
 AMP_API_KEY="$(env_or_existing AMP_API_KEY)"
-GITHUB_TOKEN="$(env_or_existing GITHUB_TOKEN)"
+GITHUB_APP_ID="$(env_or_existing GITHUB_APP_ID)"
+GITHUB_APP_INSTALLATION_ID="$(env_or_existing GITHUB_APP_INSTALLATION_ID)"
+GITHUB_APP_PRIVATE_KEY="$(env_or_existing GITHUB_APP_PRIVATE_KEY)"
+GITHUB_APP_PRIVATE_KEY_BASE64="$(env_or_existing GITHUB_APP_PRIVATE_KEY_BASE64)"
+if [[ -z "$GITHUB_APP_PRIVATE_KEY" && -z "$GITHUB_APP_PRIVATE_KEY_BASE64" && -n "${GITHUB_APP_PRIVATE_KEY_FILE:-}" ]]; then
+  GITHUB_APP_PRIVATE_KEY="$(< "$GITHUB_APP_PRIVATE_KEY_FILE")"
+fi
 if [[ -n "$ANTHROPIC_API_KEY" ]]; then
-  secret_args+=(--from-literal=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY")
+  add_secret_file_arg "$SECRET_TMPDIR" ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
 fi
 if [[ -n "$AMP_API_KEY" ]]; then
-  secret_args+=(--from-literal=AMP_API_KEY="$AMP_API_KEY")
+  add_secret_file_arg "$SECRET_TMPDIR" AMP_API_KEY "$AMP_API_KEY"
 fi
-if [[ -n "$GITHUB_TOKEN" ]]; then
-  secret_args+=(--from-literal=GITHUB_TOKEN="$GITHUB_TOKEN")
+if [[ -n "$GITHUB_APP_ID" ]]; then
+  add_secret_file_arg "$SECRET_TMPDIR" GITHUB_APP_ID "$GITHUB_APP_ID"
 fi
-kubectl "${secret_args[@]}" | apply_kubectl_yaml
+if [[ -n "$GITHUB_APP_INSTALLATION_ID" ]]; then
+  add_secret_file_arg "$SECRET_TMPDIR" GITHUB_APP_INSTALLATION_ID "$GITHUB_APP_INSTALLATION_ID"
+fi
+if [[ -n "$GITHUB_APP_PRIVATE_KEY" ]]; then
+  add_secret_file_arg "$SECRET_TMPDIR" GITHUB_APP_PRIVATE_KEY "$GITHUB_APP_PRIVATE_KEY"
+fi
+if [[ -n "$GITHUB_APP_PRIVATE_KEY_BASE64" ]]; then
+  add_secret_file_arg "$SECRET_TMPDIR" GITHUB_APP_PRIVATE_KEY_BASE64 "$GITHUB_APP_PRIVATE_KEY_BASE64"
+fi
+kubectl "${secret_file_args[@]}" | apply_kubectl_yaml
 remove_secret_key_if_present "$INFRA_SECRET_NAME" OPENAI_API_KEY
+remove_secret_key_if_present "$INFRA_SECRET_NAME" GITHUB_TOKEN
 echo "Applied Secret $INFRA_SECRET_NAME in namespace $NAMESPACE"
 
 if secret_exists centaur-firewall-ca && secret_exists centaur-firewall-ca-key; then
   echo "Firewall CA Secrets already exist in namespace $NAMESPACE; leaving unchanged"
 else
   TMPDIR="$(mktemp -d)"
-  trap 'rm -rf "$TMPDIR"' EXIT
+  TMPDIRS_TO_CLEAN+=("$TMPDIR")
   CA_KEY="$TMPDIR/ca-key.pem"
   CA_CERT="$TMPDIR/ca-cert.pem"
 

@@ -40,6 +40,14 @@ REQUIRED_SANDBOX_SESSION_COLUMNS = frozenset(
         "last_result",
         "last_result_at",
         "trace_id",
+        "repo",
+        "github_token_expires_at",
+    }
+)
+
+REQUIRED_AGENT_RUNTIME_ASSIGNMENT_COLUMNS = frozenset(
+    {
+        "repo",
     }
 )
 
@@ -53,6 +61,8 @@ REQUIRED_MIGRATIONS = frozenset(
         "010",
         "011",
         "035",
+        "038",
+        "039",
     }
 )
 
@@ -255,8 +265,35 @@ async def check_schema_compatibility(pool: asyncpg.Pool) -> dict[str, object]:
         report["required_columns_missing"] = sorted(
             REQUIRED_SANDBOX_SESSION_COLUMNS - present_columns
         )
+        assignment_col_rows = await pool.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'agent_runtime_assignments'"
+        )
+        present_assignment_columns = {r["column_name"] for r in assignment_col_rows}
+        assignment_missing = {
+            f"agent_runtime_assignments.{column}"
+            for column in (
+                REQUIRED_AGENT_RUNTIME_ASSIGNMENT_COLUMNS
+                - present_assignment_columns
+            )
+        }
+        if assignment_missing:
+            report["required_columns_missing"] = sorted(
+                [
+                    *report["required_columns_missing"],
+                    *assignment_missing,
+                ]
+            )
     except Exception as exc:
-        report["required_columns_missing"] = sorted(REQUIRED_SANDBOX_SESSION_COLUMNS)
+        report["required_columns_missing"] = sorted(
+            [
+                *REQUIRED_SANDBOX_SESSION_COLUMNS,
+                *(
+                    f"agent_runtime_assignments.{column}"
+                    for column in REQUIRED_AGENT_RUNTIME_ASSIGNMENT_COLUMNS
+                ),
+            ]
+        )
         report["errors"].append(f"column_check_failed:{exc}")
 
     try:

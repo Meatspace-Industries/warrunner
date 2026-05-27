@@ -15,6 +15,10 @@ from typing import Any
 
 import structlog
 
+from api.github_repos import (
+    configured_github_repo_aliases,
+    resolve_github_repo_alias,
+)
 from api.agent import (
     _get_runtime,
     _stream_stdout,
@@ -60,6 +64,10 @@ EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(
     os.getenv("EXECUTION_TOOL_SILENCE_TIMEOUT_S", "1800")
 )
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
+GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S = max(
+    int(os.getenv("GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S", "2400")),
+    0,
+)
 EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "1.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(
     os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5")
@@ -290,6 +298,18 @@ def _tool_silence_timeout_s() -> float:
     return float(max(EXECUTION_TOOL_SILENCE_TIMEOUT_S, EXECUTION_SILENCE_TIMEOUT_S))
 
 
+def _execution_hard_timeout_s(repo: Any) -> float:
+    if (
+        isinstance(repo, str)
+        and repo.strip()
+        and GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S > 0
+    ):
+        return float(
+            min(EXECUTION_HARD_TIMEOUT_S, GITHUB_APP_REPO_EXECUTION_HARD_TIMEOUT_S)
+        )
+    return float(EXECUTION_HARD_TIMEOUT_S)
+
+
 def _canonical_event_extends_tool_timeout(event: dict[str, Any]) -> bool:
     event_type = str(event.get("type") or "")
     if event_type != "command_execution":
@@ -328,6 +348,30 @@ def _extract_repo_context(source: Any) -> dict[str, str]:
         if isinstance(value, str) and value.strip():
             repo_context[key] = value.strip()
     return repo_context
+
+
+def _resolve_requested_repo_scope(repo: str | None) -> str | None:
+    requested = (repo or "").strip()
+    if not requested:
+        return None
+
+    aliases = configured_github_repo_aliases()
+    if not aliases:
+        raise ControlPlaneError(
+            "REPO_ALLOWLIST_REQUIRED",
+            "repository-scoped agent spawns require WARRUNNER_ALLOWED_GITHUB_REPOS",
+            422,
+        )
+
+    resolved = resolve_github_repo_alias(requested, aliases)
+    if resolved:
+        return resolved
+
+    raise ControlPlaneError(
+        "REPO_NOT_ALLOWED",
+        "requested repository is not in the configured Warrunner allowlist",
+        422,
+    )
 
 
 async def _merge_execution_repo_context(
@@ -405,7 +449,7 @@ async def _write_agents_override(runtime_id: str, agents_md_override: str) -> No
 async def get_active_assignment(pool, thread_key: str) -> dict[str, Any] | None:
     row = await pool.fetchrow(
         "SELECT thread_key, assignment_generation, runtime_id, harness, engine, persona_id, "
-        "prompt_ref, effective_agents_md_sha256, agents_md_override, state "
+        "prompt_ref, effective_agents_md_sha256, agents_md_override, repo, state "
         "FROM agent_runtime_assignments "
         "WHERE thread_key = $1 AND state = 'active' "
         "ORDER BY assignment_generation DESC LIMIT 1",
@@ -423,6 +467,7 @@ async def spawn_assignment(
     engine: str | None,
     persona_id: str | None,
     agents_md_override: str | None,
+    repo: str | None = None,
 ) -> dict[str, Any]:
     persona_info = None
     harness_selector = (harness or "").strip() or None
@@ -446,6 +491,7 @@ async def spawn_assignment(
                 422,
             )
 
+    requested_repo = _resolve_requested_repo_scope(repo)
     attach_active_assignment = (
         harness is None
         and engine is None
@@ -463,6 +509,20 @@ async def spawn_assignment(
         effective_engine = active_assignment.get("engine")
         effective_persona_id = active_assignment.get("persona_id")
         effective_agents_md_override = active_assignment.get("agents_md_override")
+        active_repo = (active_assignment.get("repo") or "").strip() or None
+        if requested_repo and active_repo and requested_repo != active_repo:
+            raise ControlPlaneError(
+                "ACTIVE_ASSIGNMENT_REPO_MISMATCH",
+                "active assignment exists with a different repository scope",
+                409,
+            )
+        if requested_repo and not active_repo:
+            raise ControlPlaneError(
+                "ACTIVE_ASSIGNMENT_REPO_MISMATCH",
+                "active assignment exists without a repository-scoped GitHub token",
+                409,
+            )
+        effective_repo = active_repo or requested_repo
     else:
         # Explicit harness wins; otherwise inherit from the persona's declared
         # engine; otherwise default to codex.
@@ -475,6 +535,7 @@ async def spawn_assignment(
         effective_engine = engine
         effective_persona_id = persona_id
         effective_agents_md_override = agents_md_override
+        effective_repo = requested_repo
 
     payload = {
         "thread_key": thread_key,
@@ -483,6 +544,7 @@ async def spawn_assignment(
         "engine": effective_engine,
         "persona_id": effective_persona_id,
         "agents_md_override": effective_agents_md_override,
+        "repo": effective_repo,
     }
     req_hash = request_hash(payload)
 
@@ -501,12 +563,14 @@ async def spawn_assignment(
             )
         return decode_jsonb(existing_idem["response_json"], {})
 
-    session = await get_or_spawn(
-        thread_key,
-        effective_harness,
-        engine=effective_engine,
-        persona=effective_persona_id,
-    )
+    spawn_kwargs: dict[str, Any] = {
+        "engine": effective_engine,
+        "persona": effective_persona_id,
+    }
+    if effective_repo is not None:
+        spawn_kwargs["repo"] = effective_repo
+    session = await get_or_spawn(thread_key, effective_harness, **spawn_kwargs)
+    effective_repo = session.repo or effective_repo
     if effective_agents_md_override is not None:
         await _write_agents_override(session.sandbox_id, effective_agents_md_override)
 
@@ -537,7 +601,7 @@ async def spawn_assignment(
 
             active = await conn.fetchrow(
                 "SELECT assignment_generation, runtime_id, harness, engine, persona_id, "
-                "prompt_ref, effective_agents_md_sha256, agents_md_override "
+                "prompt_ref, effective_agents_md_sha256, agents_md_override, repo "
                 "FROM agent_runtime_assignments "
                 "WHERE thread_key = $1 AND state = 'active' "
                 "ORDER BY assignment_generation DESC LIMIT 1",
@@ -545,13 +609,16 @@ async def spawn_assignment(
             )
 
             if active:
+                active_repo = (active["repo"] or "").strip() or None
+                session_repo = (session.repo or effective_repo or "").strip() or None
                 if (
                     active["effective_agents_md_sha256"] != prompt_sha
                     or active["harness"] != session.harness
+                    or active_repo != session_repo
                 ):
                     raise ControlPlaneError(
                         "ACTIVE_ASSIGNMENT_PROMPT_MISMATCH",
-                        "active assignment exists with different prompt identity",
+                        "active assignment exists with different prompt identity or repository scope",
                         409,
                     )
                 generation = int(active["assignment_generation"])
@@ -583,8 +650,8 @@ async def spawn_assignment(
                 await conn.execute(
                     "INSERT INTO agent_runtime_assignments ("
                     "thread_key, assignment_generation, runtime_id, harness, engine, "
-                    "persona_id, prompt_ref, effective_agents_md_sha256, agents_md_override, state"
-                    ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')",
+                    "persona_id, prompt_ref, effective_agents_md_sha256, agents_md_override, repo, state"
+                    ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active')",
                     thread_key,
                     generation,
                     session.sandbox_id,
@@ -594,6 +661,7 @@ async def spawn_assignment(
                     prompt_ref,
                     prompt_sha,
                     effective_agents_md_override,
+                    effective_repo,
                 )
                 runtime_id = session.sandbox_id
                 assignment_state = "assigned_idle"
@@ -611,6 +679,7 @@ async def spawn_assignment(
                 "persona_id": resolved_persona,
                 "prompt_ref": resolved_prompt_ref,
                 "effective_agents_md_sha256": resolved_prompt_sha,
+                "repo": effective_repo,
             }
             await conn.execute(
                 "INSERT INTO agent_spawn_requests (thread_key, spawn_id, request_hash, response_json) "
@@ -630,6 +699,7 @@ async def spawn_assignment(
                 harness=session.harness,
                 engine=session.engine,
                 persona_id=resolved_persona,
+                repo=effective_repo,
                 prompt_ref=resolved_prompt_ref,
                 prompt_sha=resolved_prompt_sha,
             )
@@ -1193,9 +1263,18 @@ async def enqueue_execution(
         }
 
     execution_id = f"exe_{uuid.uuid4().hex[:16]}"
+    assignment = await pool.fetchrow(
+        "SELECT repo FROM agent_runtime_assignments "
+        "WHERE thread_key = $1 AND assignment_generation = $2",
+        thread_key,
+        assignment_generation,
+    )
+    hard_timeout_s = _execution_hard_timeout_s(
+        assignment["repo"] if assignment else None
+    )
     now = dt.datetime.now(dt.timezone.utc)
     silence_deadline = now + dt.timedelta(seconds=EXECUTION_SILENCE_TIMEOUT_S)
-    hard_deadline = now + dt.timedelta(seconds=EXECUTION_HARD_TIMEOUT_S)
+    hard_deadline = now + dt.timedelta(seconds=hard_timeout_s)
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -1758,6 +1837,19 @@ async def release_assignment(
     return response
 
 
+async def reset_sandbox_session_for_repo_scope_change(pool, thread_key: str) -> None:
+    """Clear runtime resume state after a Discord thread switches repo scope."""
+    await pool.execute(
+        "UPDATE sandbox_sessions SET "
+        "state = 'stopped', repo = NULL, "
+        "agent_thread_id = NULL, last_delivered_id = NULL, "
+        "inflight_turn_id = NULL, inflight_turn_input = NULL, inflight_attempts = 0, "
+        "last_result = NULL, last_result_at = NULL, updated_at = NOW() "
+        "WHERE thread_key = $1",
+        thread_key,
+    )
+
+
 async def _mark_execution_terminal(
     pool,
     *,
@@ -2155,8 +2247,11 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             candidates = await conn.fetch(
-                "SELECT er.execution_id, er.thread_key "
+                "SELECT er.execution_id, er.thread_key, ara.repo "
                 "FROM agent_execution_requests er "
+                "LEFT JOIN agent_runtime_assignments ara "
+                "  ON ara.thread_key = er.thread_key "
+                "  AND ara.assignment_generation = er.assignment_generation "
                 "WHERE ("
                 "  er.status = 'queued' "
                 "  OR ("
@@ -2225,6 +2320,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                     and workflow_running_count >= _MAX_WORKFLOW_EXECUTION_SLOTS
                 ):
                     continue
+                hard_timeout_s = _execution_hard_timeout_s(candidate["repo"])
                 row = await conn.fetchrow(
                     "UPDATE agent_execution_requests er "
                     "SET status = CASE WHEN er.status IN ('queued', 'retry_wait') THEN 'running' ELSE er.status END, "
@@ -2247,7 +2343,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                     WORKER_INSTANCE_ID,
                     float(EXECUTION_WORKER_LEASE_S),
                     candidate["execution_id"],
-                    float(EXECUTION_HARD_TIMEOUT_S),
+                    hard_timeout_s,
                 )
                 if row:
                     return dict(row)
@@ -2325,7 +2421,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     )
 
     assignment = await pool.fetchrow(
-        "SELECT harness, engine, runtime_id, agents_md_override, persona_id, prompt_ref, effective_agents_md_sha256 "
+        "SELECT harness, engine, runtime_id, agents_md_override, persona_id, repo, prompt_ref, effective_agents_md_sha256 "
         "FROM agent_runtime_assignments "
         "WHERE thread_key = $1 AND assignment_generation = $2",
         thread_key,
@@ -2371,7 +2467,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
         hard_deadline = row["hard_deadline_at"]
     else:
         hard_deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
-            seconds=EXECUTION_HARD_TIMEOUT_S
+            seconds=_execution_hard_timeout_s(assignment["repo"])
         )
     durable_turn_id = str(row.get("durable_turn_id") or "")
     silence_deadline = row.get("silence_deadline_at")
@@ -2413,12 +2509,13 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
         record_execution_watchdog_timeout(harness, "silence_deadline_exceeded")
         return
 
-    session = await get_or_spawn(
-        thread_key,
-        assignment["harness"],
-        engine=assignment["engine"],
-        persona=assignment["persona_id"],
-    )
+    spawn_kwargs: dict[str, Any] = {
+        "engine": assignment["engine"],
+        "persona": assignment["persona_id"],
+    }
+    if assignment["repo"]:
+        spawn_kwargs["repo"] = assignment["repo"]
+    session = await get_or_spawn(thread_key, assignment["harness"], **spawn_kwargs)
     if session.sandbox_id != assignment["runtime_id"]:
         await pool.execute(
             "UPDATE agent_runtime_assignments SET runtime_id = $1, updated_at = NOW() "

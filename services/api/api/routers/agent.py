@@ -150,6 +150,7 @@ class ExecuteRequest(BaseModel):
     message: str | None = None
     engine: str | None = None
     persona_id: str | None = None
+    repo: str | None = None
 
 
 class SpawnRequest(BaseModel):
@@ -159,6 +160,7 @@ class SpawnRequest(BaseModel):
     engine: str | None = None
     persona_id: str | None = None
     agents_md_override: str | None = None
+    repo: str | None = None
 
 
 class MessageRequest(BaseModel):
@@ -313,6 +315,7 @@ async def _auto_execute(pool, body: ExecuteRequest) -> JSONResponse:
         engine=body.engine,
         persona_id=body.persona_id,
         agents_md_override=None,
+        repo=body.repo,
     )
     assignment_generation = int(spawn_result["assignment_generation"])
 
@@ -372,6 +375,7 @@ async def spawn(req: SpawnRequest, request: Request):
             engine=req.engine,
             persona_id=req.persona_id,
             agents_md_override=req.agents_md_override,
+            repo=req.repo,
         )
     except ControlPlaneError as exc:
         return _json_error(exc.code, exc.message, exc.status_code)

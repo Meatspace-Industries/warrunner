@@ -171,20 +171,34 @@ cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF
 }
 EOF
 
+# ── GitHub auth placeholder for proxy-side secret rewriting ─────────────────
+configure_github_git_credentials() {
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        git config --global --unset-all credential.helper 2>/dev/null || true
+        git config --global http.https://github.com/.extraheader \
+            "Authorization: Basic GITHUB_BASIC_AUTH"
+    fi
+}
+
+configure_github_git_credentials
+
 # ── Per-session workspace clone (no shared worktree metadata) ────────────────
 WORKSPACE_DIR="$HOME_DIR/workspace"
 if [ -n "${AGENT_REPO:-}" ]; then
     REPO_PATH="$HOME_DIR/github/$AGENT_REPO"
-    if ! git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
-        echo "AGENT_REPO is not a valid git repository: $REPO_PATH" >&2
-        exit 1
-    fi
-
     rm -rf "$WORKSPACE_DIR"
-    if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
-        echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
-        rm -rf "$WORKSPACE_DIR"
-        git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+    if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+        if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
+            echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
+            rm -rf "$WORKSPACE_DIR"
+            git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+        fi
+    else
+        REPO_URL="https://github.com/$AGENT_REPO.git"
+        if ! git clone --quiet "$REPO_URL" "$WORKSPACE_DIR"; then
+            echo "failed to clone AGENT_REPO from GitHub: $AGENT_REPO" >&2
+            exit 1
+        fi
     fi
 
     BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
@@ -253,10 +267,7 @@ touch "$HOME_DIR/.ready"
 # ── Background: slow auth tasks ─────────────────────────────────────────────
 {
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        git config --global credential.helper store
-        printf 'https://oauth2:%s@github.com\n' "$GITHUB_TOKEN" > "$HOME_DIR/.git-credentials"
         echo "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
-        gh auth setup-git 2>/dev/null || true
     fi
 } &
 

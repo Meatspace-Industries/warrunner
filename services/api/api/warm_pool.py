@@ -371,6 +371,7 @@ async def claim_container(
         engine=warm.engine,
         started_at=time.time(),
         trace_id=trace_id or "",
+        repo=repo or "",
     )
     _get_runtime(session.sandbox_id)
 

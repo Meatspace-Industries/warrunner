@@ -23,6 +23,7 @@ class Input:
     harness: str | None = None
     persona: str | None = None
     agents_md_override: str | None = None
+    repo: str | None = None
 
     @property
     def effective_parts(self) -> list[dict[str, Any]]:
@@ -53,4 +54,5 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         harness=inp.harness,
         persona=inp.persona,
         agents_md_override=inp.agents_md_override,
+        repo=inp.repo,
     )
