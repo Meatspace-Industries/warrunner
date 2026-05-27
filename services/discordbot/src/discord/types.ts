@@ -42,9 +42,14 @@ export type DiscordMessageReference = {
   fail_if_not_exists?: boolean
 }
 
+export type DiscordAllowedMentions = {
+  parse: string[]
+  users?: string[]
+}
+
 export type DiscordCreateMessageBody = {
   content: string
-  allowed_mentions?: { parse: string[] }
+  allowed_mentions?: DiscordAllowedMentions
   message_reference?: DiscordMessageReference
 }
 
