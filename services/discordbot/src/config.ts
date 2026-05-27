@@ -39,6 +39,7 @@ const EnvSchema = z.object({
   WARRUNNER_HOME_CHANNEL_IDS: ListFromEnv,
   WARRUNNER_INTAKE_CHANNEL_IDS: ListFromEnv,
   WARRUNNER_ALLOWED_ROLE_IDS: ListFromEnv,
+  WARRUNNER_MENTION_USER_ALIASES: ListFromEnv,
   WARRUNNER_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(40),
   WARRUNNER_REQUIRE_HOME_THREAD: BoolFromEnv,
   WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED: BoolFromEnv,
@@ -73,6 +74,24 @@ export function homeChannelIds(config: AppConfig): Set<string> {
       .map(value => value.trim())
       .filter(Boolean)
   )
+}
+
+export function mentionUserAliases(config: AppConfig): Map<string, string> {
+  const aliases = new Map<string, string>()
+  for (const entry of config.WARRUNNER_MENTION_USER_ALIASES) {
+    const match = /^([^=:]+)[=:](\d{1,32})$/.exec(entry)
+    if (!match) continue
+    const alias = normalizeMentionAlias(match[1] ?? '')
+    const userId = match[2]
+    if (!userId) continue
+    if (!alias || aliases.has(alias)) continue
+    aliases.set(alias, userId)
+  }
+  return aliases
+}
+
+export function normalizeMentionAlias(value: string): string {
+  return value.trim().replace(/^@+/, '').toLowerCase()
 }
 
 function withMeatspaceEnvAliases(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
