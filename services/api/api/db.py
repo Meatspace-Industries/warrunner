@@ -16,6 +16,7 @@ BASE_MIGRATIONS_TABLE = "schema_migrations"
 OVERLAY_MIGRATIONS_TABLE = "schema_migrations_overlay"
 OVERLAY_MIGRATIONS_RELATIVE_DIR = Path("services") / "api" / "db" / "migrations"
 DEFAULT_MIGRATION_TIMEOUT_SECONDS = 300
+NOOP_POOL_RESET_MODES = frozenset({"noop", "none", "disabled"})
 
 REQUIRED_SANDBOX_SESSION_STATES = frozenset(
     {
@@ -124,14 +125,27 @@ def _migration_timeout_seconds() -> float:
 
 async def create_pool(database_url: str) -> asyncpg.Pool:
     run_migrations(database_url)
+    reset = _pool_reset_callback()
     pool = await asyncpg.create_pool(
         database_url,
         min_size=2,
         max_size=10,
         command_timeout=60,
+        reset=reset,
     )
     assert pool is not None
     return pool
+
+
+def _pool_reset_callback():
+    mode = (os.getenv("ASYNCPG_POOL_RESET_MODE") or "").strip().lower()
+    if mode not in NOOP_POOL_RESET_MODES:
+        return None
+
+    async def _noop_reset(_connection) -> None:
+        return None
+
+    return _noop_reset
 
 
 async def close_pool(pool: asyncpg.Pool) -> None:

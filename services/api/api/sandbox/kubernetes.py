@@ -2255,6 +2255,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             {"name": "WORKFLOW_DIRS", "value": workflow_dirs},
             {"name": "PLUGIN_WATCHER_ENABLED", "value": "0"},
             {"name": "CENTAUR_WORKFLOW_RUN_ID", "value": run_id},
+            {"name": "ASYNCPG_POOL_RESET_MODE", "value": "noop"},
         ]
         if database_url:
             env.insert(0, {"name": "DATABASE_URL", "value": database_url})

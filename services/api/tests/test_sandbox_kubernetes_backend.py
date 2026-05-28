@@ -1535,6 +1535,7 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     assert env["DISCORD_GUILD_ID"]["value"] == "guild-1"
     assert env["DISCORD_ETL_ENABLED"]["value"] == "1"
     assert env["DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS"]["value"] == "*legal*"
+    assert env["ASYNCPG_POOL_RESET_MODE"]["value"] == "noop"
     assert env["DISCORD_BOT_TOKEN"]["valueFrom"]["secretKeyRef"] == {
         "name": "centaur-infra-env",
         "key": "DISCORD_BOT_TOKEN",
