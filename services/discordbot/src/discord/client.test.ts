@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { loadConfig } from '../config'
-import { DiscordClient } from './client'
+import { DiscordChannelResolver, DiscordClient } from './client'
+import type { DiscordChannel } from './types'
 
 const seenPaths: string[] = []
 
@@ -48,5 +49,26 @@ describe('DiscordClient', () => {
 
     await expect(new DiscordClient(config).triggerTyping('thread-1')).resolves.toBeUndefined()
     expect(seenPaths).toEqual(['/api/v10/channels/thread-1/typing'])
+  })
+})
+
+describe('DiscordChannelResolver', () => {
+  it('only treats Discord thread channel types as parent-routed threads', async () => {
+    const channels = new Map<string, DiscordChannel>([
+      ['thread-1', { id: 'thread-1', type: 11, parent_id: 'forum-1' }],
+      ['text-1', { id: 'text-1', type: 0, parent_id: 'category-1' }]
+    ])
+    const client = {
+      fetchChannel: async (channelId: string) => {
+        const channel = channels.get(channelId)
+        if (!channel) throw new Error(`missing channel ${channelId}`)
+        return channel
+      }
+    } as unknown as DiscordClient
+    const resolver = new DiscordChannelResolver(client)
+
+    await expect(resolver.parentChannelId('thread-1')).resolves.toBe('forum-1')
+    await expect(resolver.parentChannelId('text-1')).resolves.toBeUndefined()
+    expect(resolver.parents.get('text-1')).toBeUndefined()
   })
 })

@@ -524,6 +524,23 @@ def test_collect_secrets_can_disable_openai_infra_secret(
     assert "AMP_API_KEY" in secret_names
 
 
+def test_collect_secrets_can_disable_unused_brokered_harness_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY,anthropic-claude"
+    )
+
+    manager = ToolManager(tmp_path / "tools")
+    secrets = manager.collect_secrets()
+    secret_names = {secret.name for secret in secrets}
+
+    assert "OPENAI_API_KEY" not in secret_names
+    assert "anthropic-claude" not in secret_names
+    assert "openai-codex" in secret_names
+
+
 @pytest.mark.asyncio
 async def test_call_tool_invokes_sync_and_async_methods_with_secret_placeholders(
     tmp_path: Path,

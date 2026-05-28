@@ -107,7 +107,7 @@ require_env_or_existing_value() {
   if [[ -n "${!name:-}" ]]; then
     return
   fi
-  if [[ "$CHECK_ONLY" != "1" ]] && [[ -n "$(existing_secret_value "$name")" ]]; then
+  if [[ -n "$(existing_secret_value "$name")" ]]; then
     return
   fi
   echo "FATAL: $name is required in $ENV_FILE or existing Secret $INFRA_SECRET_NAME" >&2
@@ -116,10 +116,11 @@ require_env_or_existing_value() {
 
 has_existing_secret_key() {
   local key="$1"
-  [[ "$CHECK_ONLY" != "1" ]] && secret_has_key "$INFRA_SECRET_NAME" "$key"
+  secret_has_key "$INFRA_SECRET_NAME" "$key"
 }
 
 secret_exists() {
+  command -v kubectl >/dev/null 2>&1 || return 1
   kubectl -n "$NAMESPACE" get secret "$1" >/dev/null 2>&1
 }
 
@@ -158,6 +159,7 @@ secret_data_value() {
 secret_has_key() {
   local secret_name="$1"
   local key="$2"
+  command -v kubectl >/dev/null 2>&1 || return 1
   kubectl -n "$NAMESPACE" get secret "$secret_name" -o json 2>/dev/null \
     | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin).get("data", {}) else 1)' "$key"
 }
@@ -226,6 +228,7 @@ env_or_existing_or_generated() {
 validate_codex_auth() {
   python3 - "$CODEX_AUTH_FILE" <<'PY'
 import base64
+import datetime as dt
 import json
 import sys
 
@@ -282,6 +285,7 @@ codex_auth_value() {
   local field="$1"
   python3 - "$CODEX_AUTH_FILE" "$field" <<'PY'
 import base64
+import datetime as dt
 import json
 import sys
 
@@ -312,6 +316,13 @@ def client_id(tokens):
                 return item.strip()
     return ""
 
+def token_expiry_iso(token):
+    payload = decode_payload(token)
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return ""
+    return dt.datetime.fromtimestamp(exp, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
 path, field = sys.argv[1], sys.argv[2]
 with open(path, encoding="utf-8") as f:
     data = json.load(f)
@@ -325,6 +336,19 @@ elif field == "account_id":
     value = tokens.get("account_id")
 elif field == "client_id":
     value = client_id(tokens)
+elif field == "broker_blob":
+    refresh_token = tokens.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token.strip():
+        raise SystemExit("FATAL: Codex auth JSON is missing refresh_token")
+    value = json.dumps(
+        {
+            "access_token": tokens.get("access_token") or "",
+            "refresh_token": refresh_token,
+            "expires_at": token_expiry_iso(tokens.get("access_token")),
+            "last_refresh": data.get("last_refresh") or "",
+        },
+        separators=(",", ":"),
+    )
 else:
     raise SystemExit(f"unknown Codex auth field: {field}")
 
@@ -435,7 +459,7 @@ add_secret_file_arg "$SECRET_TMPDIR" SLACKBOT_API_KEY "$SLACKBOT_API_KEY"
 add_secret_file_arg "$SECRET_TMPDIR" LMNR_PROJECT_API_KEY "$LMNR_PROJECT_API_KEY"
 add_secret_file_arg "$SECRET_TMPDIR" LMNR_BASE_URL "$LMNR_BASE_URL"
 OPENAI_CODEX_CLIENT_ID="${OPENAI_CODEX_CLIENT_ID:-$(codex_auth_value client_id)}"
-OPENAI_CODEX_BLOB="${OPENAI_CODEX_BLOB:-$(codex_auth_value refresh_token)}"
+OPENAI_CODEX_BLOB="${OPENAI_CODEX_BLOB:-$(codex_auth_value broker_blob)}"
 OPENAI_CODEX_ACCOUNT_ID="${OPENAI_CODEX_ACCOUNT_ID:-$(codex_auth_value account_id)}"
 add_secret_file_arg "$SECRET_TMPDIR" OPENAI_CODEX_CLIENT_ID "$OPENAI_CODEX_CLIENT_ID"
 add_secret_file_arg "$SECRET_TMPDIR" OPENAI_CODEX_BLOB "$OPENAI_CODEX_BLOB"

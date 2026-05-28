@@ -1,4 +1,11 @@
 {{- if .Values.tokenBroker.enabled }}
+{{- $storeSource := default .Values.ironProxy.secretSource .Values.tokenBroker.storeSource -}}
+{{- if eq $storeSource "env" -}}
+{{- fail "tokenBroker.storeSource cannot be env because env is not writable; set tokenBroker.storeSource=file with tokenBroker.fileStore.enabled=true, or use onepassword/onepassword-connect" -}}
+{{- end -}}
+{{- if and (eq $storeSource "file") (not .Values.tokenBroker.fileStore.enabled) -}}
+{{- fail "tokenBroker.storeSource=file requires tokenBroker.fileStore.enabled=true" -}}
+{{- end -}}
 # iron-token-broker — owns the OAuth refresh-token state machine for any
 # OAuthTokenSecret with grant=refresh_token. Single-writer process; the API
 # reconciles the ConfigMap content (one credentials[] entry per registered
@@ -8,6 +15,24 @@
 # `helm upgrade` without needing to bounce the API.
 {{- $brokerConfigName := printf "%s-config" (include "centaur.tokenBrokerName" .) -}}
 {{- $existingConfig := lookup "v1" "ConfigMap" .Release.Namespace $brokerConfigName -}}
+{{- if and .Values.tokenBroker.fileStore.enabled (not .Values.tokenBroker.fileStore.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-store" (include "centaur.tokenBrokerName" .) }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "token-broker") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.tokenBroker.fileStore.size | quote }}
+{{- if .Values.tokenBroker.fileStore.storageClassName }}
+  storageClassName: {{ .Values.tokenBroker.fileStore.storageClassName | quote }}
+{{- end }}
+---
+{{- end }}
 {{- if not $existingConfig }}
 # Empty-but-valid bootstrap ConfigMap so the broker Pod can start on initial
 # install before the API has reconciled. The API replaces this on first
@@ -73,6 +98,34 @@ spec:
       imagePullSecrets:
 {{ toYaml . | nindent 8 }}
       {{- end }}
+{{- if .Values.tokenBroker.fileStore.enabled }}
+      initContainers:
+        - name: bootstrap-file-store
+          image: {{ .Values.tokenBroker.fileStore.bootstrapImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              set -eu
+              mkdir -p "$STORE_DIR"
+{{- range .Values.tokenBroker.fileStore.bootstrapSecretKeys }}
+              if [ -s "/bootstrap/{{ . }}" ] && [ ! -s "$STORE_DIR/{{ . }}.json" ]; then
+                cp "/bootstrap/{{ . }}" "$STORE_DIR/{{ . }}.json"
+                chmod 600 "$STORE_DIR/{{ . }}.json"
+              fi
+{{- end }}
+          env:
+            - name: STORE_DIR
+              value: {{ .Values.tokenBroker.fileStore.mountPath | quote }}
+          volumeMounts:
+            - name: token-broker-store
+              mountPath: {{ .Values.tokenBroker.fileStore.mountPath | quote }}
+            - name: token-broker-bootstrap
+              mountPath: /bootstrap
+              readOnly: true
+{{- end }}
       containers:
         - name: iron-token-broker
           image: {{ printf "%s:%s" .Values.tokenBroker.image.repository .Values.tokenBroker.image.tag | quote }}
@@ -86,6 +139,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sIRON_BROKER_TOKEN" .Values.secretManager.envPrefix }}
+{{- range .Values.tokenBroker.envSecretKeys }}
+            - name: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" $ }}
+                  key: {{ printf "%s%s" $.Values.secretManager.envPrefix . | quote }}
+{{- end }}
 {{- if eq .Values.ironProxy.secretSource "onepassword-connect" }}
             - name: OP_CONNECT_HOST
               value: {{ include "centaur.onepasswordConnectUrl" . | quote }}
@@ -110,6 +170,10 @@ spec:
             - name: config
               mountPath: /etc/iron-token-broker
               readOnly: true
+{{- if .Values.tokenBroker.fileStore.enabled }}
+            - name: token-broker-store
+              mountPath: {{ .Values.tokenBroker.fileStore.mountPath | quote }}
+{{- end }}
           securityContext:
 {{ toYaml .Values.containerSecurityContext | nindent 12 }}
             readOnlyRootFilesystem: true
@@ -126,6 +190,22 @@ spec:
             # broker is useless, and ordering resolves itself once the API
             # reconciles.
             name: {{ include "centaur.tokenBrokerName" . }}-config
+{{- if .Values.tokenBroker.fileStore.enabled }}
+        - name: token-broker-store
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-store" (include "centaur.tokenBrokerName" .)) .Values.tokenBroker.fileStore.existingClaim | quote }}
+        - name: token-broker-bootstrap
+          secret:
+            secretName: {{ include "centaur.secretEnvName" . }}
+            optional: true
+{{- if .Values.tokenBroker.fileStore.bootstrapSecretKeys }}
+            items:
+{{- range .Values.tokenBroker.fileStore.bootstrapSecretKeys }}
+              - key: {{ printf "%s%s" $.Values.secretManager.envPrefix . | quote }}
+                path: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

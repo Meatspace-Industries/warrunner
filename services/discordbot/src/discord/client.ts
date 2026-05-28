@@ -117,15 +117,22 @@ export class DiscordChannelResolver {
   }
 
   remember(channel: DiscordChannel): void {
-    this.parents.set(channel.id, channel.parent_id ?? undefined)
+    this.parents.set(channel.id, threadParentChannelId(channel))
   }
 
   async parentChannelId(channelId: string): Promise<string | undefined> {
     if (this.parents.has(channelId)) return this.parents.get(channelId)
     const channel = await this.client.fetchChannel(channelId)
     this.remember(channel)
-    return channel.parent_id ?? undefined
+    return this.parents.get(channelId)
   }
+}
+
+const DISCORD_THREAD_CHANNEL_TYPES = new Set([10, 11, 12])
+
+function threadParentChannelId(channel: DiscordChannel): string | undefined {
+  if (!DISCORD_THREAD_CHANNEL_TYPES.has(channel.type)) return undefined
+  return channel.parent_id ?? undefined
 }
 
 function readJson(text: string): unknown {

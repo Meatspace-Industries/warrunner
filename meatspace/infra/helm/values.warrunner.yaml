@@ -18,7 +18,7 @@ api:
   discordBackfillPagesPerJob: 5
   extraEnv:
     CENTAUR_DEPLOYMENT_NAME: warrunner
-    CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY
+    CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY,anthropic-claude
     CENTAUR_REQUIRE_GITHUB_APP_AUTH: "true"
     # Keep repo-scoped turns below the GitHub App token lifetime, leaving room
     # for proxy/pod readiness waits and a safety buffer.
@@ -34,6 +34,13 @@ ironProxy:
 
 tokenBroker:
   enabled: true
+  storeSource: file
+  envSecretKeys:
+    - OPENAI_CODEX_CLIENT_ID
+  fileStore:
+    enabled: true
+    bootstrapSecretKeys:
+      - OPENAI_CODEX_BLOB
 
 toolServer:
   enabled: true

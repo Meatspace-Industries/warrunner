@@ -406,6 +406,12 @@ spec:
 {{- if .Values.tokenBroker.enabled }}
             - name: FIREWALL_MANAGER_TOKEN_BROKER_TTL
               value: {{ .Values.tokenBroker.ttl | quote }}
+            - name: FIREWALL_MANAGER_TOKEN_BROKER_STORE_SOURCE
+              value: {{ default .Values.ironProxy.secretSource .Values.tokenBroker.storeSource | quote }}
+{{- if eq (default .Values.ironProxy.secretSource .Values.tokenBroker.storeSource) "file" }}
+            - name: IRON_TOKEN_BROKER_FILE_STORE_DIR
+              value: {{ .Values.tokenBroker.fileStore.mountPath | quote }}
+{{- end }}
             - name: KUBERNETES_TOKEN_BROKER_NAME
               value: {{ include "centaur.tokenBrokerName" . | quote }}
             - name: KUBERNETES_TOKEN_BROKER_URL

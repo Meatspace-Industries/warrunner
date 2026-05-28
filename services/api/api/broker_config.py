@@ -11,11 +11,12 @@ One ``credentials`` entry per registered ``BrokeredTokenSecret``:
   ``token_broker`` source side).
 - ``token_endpoint`` = the secret's declared endpoint; required because the
   broker has to know where to POST the refresh.
-- ``client_id`` / ``client_secret`` resolve through the same secret source the
-  proxy uses (1password / 1password_connect).
+- ``client_id`` / ``client_secret`` resolve through the same read-side secret
+  source the proxy uses (env / 1password / 1password_connect).
 - ``store`` points at the writable blob holding the refresh token; we reuse
   ``fields["refresh_token"].secret_ref`` so the operator only bootstraps the
-  blob in one place.
+  blob in one place. The store can be a writable file/PVC even when the
+  read-side source is env.
 
 Tools that need a coordinated refresh-token rotation opt in by declaring
 ``type = "brokered_token"`` instead of ``type = "oauth_token"``.
@@ -44,9 +45,10 @@ DEFAULT_BROKER_METRICS_PORT = 9091
 BROKER_BEARER_AUTH_ENV = "IRON_BROKER_TOKEN"
 
 
-# Per the broker README: ``env`` is read-only and cannot back the store. For
-# every other source the proxy already supports, the broker accepts the same
-# shape on the store side.
+# Per the broker README: ``env`` is read-only and cannot back the store.
+# FIREWALL_MANAGER_TOKEN_BROKER_STORE_SOURCE can override the proxy's read-side
+# source so deployments can keep ordinary secrets in env/Kubernetes Secret while
+# storing broker-owned refresh blobs in a writable file/PVC.
 _STORE_SOURCES: dict[str, str] = {
     "onepassword": "1password",
     "onepassword-connect": "1password_connect",
@@ -64,8 +66,32 @@ def _secret_source_kind() -> str:
     return os.environ.get("FIREWALL_MANAGER_SECRET_SOURCE", "env").strip().lower()
 
 
+def _store_source_kind() -> str:
+    return (
+        os.environ.get("FIREWALL_MANAGER_TOKEN_BROKER_STORE_SOURCE")
+        or _secret_source_kind()
+    ).strip().lower()
+
+
 def _op_vault() -> str:
     return os.environ.get("OP_VAULT", "ai-agents").strip()
+
+
+def _file_store_dir() -> str:
+    return (
+        os.environ.get("IRON_TOKEN_BROKER_FILE_STORE_DIR")
+        or "/var/lib/iron-token-broker"
+    ).strip().rstrip("/") or "/var/lib/iron-token-broker"
+
+
+def _file_store_name(secret_ref: str) -> str:
+    # Keep paths predictable while preventing a secret_ref from escaping the
+    # configured store directory.
+    safe = "".join(
+        ch if ch.isalnum() or ch in {"_", "-", "."} else "_"
+        for ch in secret_ref.strip()
+    ).strip("._")
+    return f"{safe or 'credential'}.json"
 
 
 def _build_read_source(field: OAuthFieldSource) -> dict[str, Any]:
@@ -98,13 +124,19 @@ def _build_store_source(field: OAuthFieldSource) -> dict[str, Any]:
     every refresh; ``env`` is rejected because environment variables are
     read-only at the process level.
     """
-    kind = _secret_source_kind()
+    kind = _store_source_kind()
+    if kind == "file":
+        return {
+            "type": "file",
+            "path": f"{_file_store_dir()}/{_file_store_name(field.secret_ref)}",
+        }
     iron_proxy_type = _STORE_SOURCES.get(kind)
     if iron_proxy_type is None:
         raise ValueError(
             f"iron-token-broker store cannot use secret source {kind!r}; "
-            "configure FIREWALL_MANAGER_SECRET_SOURCE=onepassword or "
-            "onepassword-connect (refresh tokens must be writable)"
+            "configure FIREWALL_MANAGER_TOKEN_BROKER_STORE_SOURCE=file or "
+            "FIREWALL_MANAGER_SECRET_SOURCE=onepassword/onepassword-connect "
+            "(refresh tokens must be writable)"
         )
     return {
         "type": iron_proxy_type,

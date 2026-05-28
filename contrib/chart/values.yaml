@@ -50,6 +50,9 @@ toolServer:
 # rewrites the refresh-token blob on every rotation.
 tokenBroker:
   enabled: false
+  # Defaults to ironProxy.secretSource. Set to "file" when static/read-side
+  # secrets come from env but broker-owned refresh blobs need a writable store.
+  storeSource: ""
   image:
     repository: ironsh/iron-token-broker
     tag: 0.0.1-rc.2
@@ -62,6 +65,19 @@ tokenBroker:
   # broker resolver rejects the response.
   ttl: 1m
   resources: {}
+  # Env vars from secretManager.existingSecretName made available to the broker
+  # for read-side fields like public OAuth client ids.
+  envSecretKeys: []
+  fileStore:
+    enabled: false
+    mountPath: /var/lib/iron-token-broker
+    existingClaim: ""
+    size: 1Gi
+    storageClassName: ""
+    bootstrapImage: busybox:1.36
+    # Secret keys copied once into the writable file store as <key>.json when
+    # the file is absent. Values must already be broker JSON blobs.
+    bootstrapSecretKeys: []
 
 # Values for the upstream 1Password Connect subchart
 # (https://github.com/1Password/connect-helm-charts/tree/main/charts/connect).

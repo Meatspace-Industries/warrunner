@@ -47,8 +47,8 @@ meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh --check-only
 
 The real bootstrap writes Kubernetes Secrets. It uploads local ChatGPT Codex auth
 from `~/.codex/auth.json` into `warrunner-codex-auth` and derives the token-broker
-refresh-token fields in `centaur-infra-env`, so get explicit operator approval
-before running it:
+client/account fields plus the initial broker JSON blob in `centaur-infra-env`,
+so get explicit operator approval before running it:
 
 ```bash
 meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh
@@ -70,8 +70,14 @@ meatspace/scripts/warrunner-deploy-gke.sh --render-only >/tmp/warrunner-render.y
 rg -n "KUBERNETES_CODEX_AUTH_SECRET_NAME|CENTAUR_DISABLED_INFRA_SECRETS|name: OPENAI_API_KEY|OPENAI_API_KEY" /tmp/warrunner-render.yaml
 ```
 
-The only `OPENAI_API_KEY` occurrence should be the disabled-secret marker:
-`CENTAUR_DISABLED_INFRA_SECRETS=OPENAI_API_KEY`.
+`OPENAI_API_KEY` should appear only inside the disabled-secret marker
+(`CENTAUR_DISABLED_INFRA_SECRETS`) and never as an injected env var.
+
+Warrunner uses `iron-token-broker` with a persistent file store for Codex
+refresh-token rotation. Helm creates a ReadWriteOnce PVC for
+`/var/lib/iron-token-broker`; the broker bootstrap init container copies
+`OPENAI_CODEX_BLOB` into that PVC only when the file is absent, then the broker
+owns subsequent refresh-token writes.
 
 Deploy:
 
