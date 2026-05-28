@@ -222,9 +222,29 @@ def require_env(name, value):
 
 require_env("FIREWALL_MANAGER_SECRET_SOURCE", "env")
 require_env("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "env")
+require_env("KUBERNETES_TOOL_SERVER_PORT", "8001")
+require_env("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS", "DISCORD_BOT_TOKEN")
 require_env("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "true")
+if "name: DISCORD_BOT_TOKEN" not in text:
+    raise SystemExit("FATAL: rendered deployment does not inject DISCORD_BOT_TOKEN")
 if re.search(r"name:\s*GITHUB_TOKEN\b", text):
     raise SystemExit("FATAL: rendered deployment still injects GITHUB_TOKEN")
+
+postgres_policy = re.search(
+    r"kind:\s*NetworkPolicy\s*\n"
+    r"metadata:\s*\n"
+    r"\s*name:\s*[\"']?[^\"'\n]*-centaur-postgres[\"']?\s*\n"
+    r"(?P<body>.*?)(?:\n---|\Z)",
+    text,
+    re.S,
+)
+if not postgres_policy or not re.search(
+    r"centaur\.ai/iron-proxy:\s*[\"']?true[\"']?",
+    postgres_policy.group("body"),
+):
+    raise SystemExit(
+        "FATAL: rendered Postgres NetworkPolicy does not admit iron-proxy pods"
+    )
 
 if re.search(
     r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n\s*value:\s*.*OPENAI_API_KEY",

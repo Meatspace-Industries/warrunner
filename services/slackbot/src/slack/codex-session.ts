@@ -1,5 +1,7 @@
+import { createHash } from 'crypto'
 import type { WebClient } from '@slack/web-api'
 import { slackReplyLimits } from '../constants'
+import { logInfo } from '../logging'
 import { AgentSessionRenderer } from './agent-session'
 import {
   clipLines,
@@ -28,14 +30,19 @@ type CodexSessionState = {
   threadId: string
   stepCounter: number
   nextCommandIndex: number
-  commentaryText: string
-  commentaryByItemId: Map<string, string>
+  answerByItemId: Map<string, string>
+  harnessAnswerText: string
   answerText: string
+  commentaryByItemId: Map<string, string>
+  harnessCommentaryText: string
+  commentaryText: string
+  completedItemIds: Set<string>
   firstBufferedTextAt: number | null
   streamedCommentaryText: string
   streamedAnswerText: string
   deliveredAnswerChars: number
   agentMessagePhase: AgentMessagePhase | null
+  agentMessagePhaseByItemId: Map<string, AgentMessagePhase>
   planText: string
   taskByUseId: Map<string, HarnessTask>
   commandOutputById: Map<string, string>
@@ -44,8 +51,16 @@ type CodexSessionState = {
   done: boolean
 }
 
+type CompletedCodexSessionState = {
+  threadId: string
+  streamedAnswerChars: number
+  completedAt: number
+}
+
 const states = new Map<string, CodexSessionState>()
+const completedStates = new Map<string, CompletedCodexSessionState>()
 const PRE_STREAM_GRACE_MS = 500
+const COMPLETED_STATE_TTL_MS = 10 * 60 * 1000
 
 export class CodexSessionRenderer {
   private readonly renderer: AgentSessionRenderer
@@ -58,6 +73,17 @@ export class CodexSessionRenderer {
     agentSessionId: string,
     event: any
   ): Promise<{ threadId?: string; done: boolean; streamedAnswerChars: number }> {
+    const completed = completedState(agentSessionId)
+    if (completed) {
+      if (isTerminalTurnEvent(event)) {
+        logCodexTerminalEventIgnoredAfterDone(agentSessionId, event, completed)
+      }
+      return {
+        threadId: completed.threadId || undefined,
+        done: true,
+        streamedAnswerChars: completed.streamedAnswerChars
+      }
+    }
     const state = getState(agentSessionId)
     if (event?.session_id) state.threadId = String(event.session_id)
     if (event?.thread_id) state.threadId = String(event.thread_id)
@@ -160,18 +186,14 @@ export class CodexSessionRenderer {
       await this.publishActivitySummary(agentSessionId, state)
     }
 
-    const assistantMessage = assistantText(event)
-    if (assistantMessage) {
-      const buffer = activeAssistantBuffer(state, event)
-      const current = buffer === 'answer' ? state.answerText : state.commentaryText
-      const delta = messageDelta(current, assistantMessage)
-      if (delta) {
-        if (buffer === 'answer') state.answerText += delta
-        else {
-          state.commentaryText += delta
-          trackCommentaryText(state, event, delta)
-        }
+    if (eventCarriesAgentMessageText(event)) {
+      const buffer = activeAssistantBuffer(state, event, agentSessionId)
+      const update = applyAgentMessageUpdate(state, event, buffer, agentSessionId)
+      if (update.bufferChanged) {
         await this.publishPendingAssistantText(agentSessionId, state)
+      }
+      if (update.correction) {
+        logCanonicalCorrection(agentSessionId, event, state, update.correction)
       }
       if (buffer === 'commentary' && event?.type === 'item.completed') {
         upsertThinkingTask(state, event)
@@ -193,14 +215,20 @@ export class CodexSessionRenderer {
     }
 
     if (isTerminalTurnEvent(event)) {
-      if (typeof event.result === 'string' && !state.answerText.trim()) {
-        const resultText = event.result.trim()
-        if (resultText) {
-          state.answerText += resultText
-          await this.publishPendingAssistantText(agentSessionId, state, { force: true })
-        }
+      const resultText = terminalResultText(event)
+      const willClose = Boolean(resultText || event?.type !== 'result')
+      logCodexTerminalEventReceived(agentSessionId, event, state, {
+        resultText,
+        willClose
+      })
+      if (resultText && !state.answerText.trim()) {
+        state.harnessAnswerText += resultText
+        recomposeBuffers(state)
+        await this.publishPendingAssistantText(agentSessionId, state, { force: true })
       }
-      await this.done(agentSessionId)
+      if (willClose) {
+        await this.done(agentSessionId)
+      }
     }
 
     return {
@@ -221,11 +249,15 @@ export class CodexSessionRenderer {
     await this.publishPendingAssistantText(agentSessionId, state, { force: true })
     const { streamedTextChars } = await this.renderer.done(agentSessionId, {
       streamFinalUpdates: true,
-      commentaryMarkdown: state.commentaryText,
       answerMarkdown: state.answerText
     })
     state.deliveredAnswerChars = streamedTextChars
     state.done = true
+    completedStates.set(agentSessionId, {
+      threadId: state.threadId,
+      streamedAnswerChars: state.deliveredAnswerChars,
+      completedAt: Date.now()
+    })
     states.delete(agentSessionId)
   }
 
@@ -322,14 +354,19 @@ function getState(agentSessionId: string): CodexSessionState {
       threadId: '',
       stepCounter: 0,
       nextCommandIndex: 0,
-      commentaryText: '',
-      commentaryByItemId: new Map(),
+      answerByItemId: new Map(),
+      harnessAnswerText: '',
       answerText: '',
+      commentaryByItemId: new Map(),
+      harnessCommentaryText: '',
+      commentaryText: '',
+      completedItemIds: new Set(),
       firstBufferedTextAt: null,
       streamedCommentaryText: '',
       streamedAnswerText: '',
       deliveredAnswerChars: 0,
       agentMessagePhase: null,
+      agentMessagePhaseByItemId: new Map(),
       planText: '',
       taskByUseId: new Map(),
       commandOutputById: new Map(),
@@ -358,25 +395,42 @@ function trackAgentMessageLifecycle(event: any, state: CodexSessionState): void 
   const phase = agentMessageItemPhase(event?.item)
   if (!phase) return
   state.agentMessagePhase = phase
+  const id = agentMessageEventId(event)
+  if (id) state.agentMessagePhaseByItemId.set(id, phase)
+}
+
+function agentMessageEventId(event: any): string {
+  return String(event?.itemId ?? event?.item_id ?? event?.item?.id ?? '')
 }
 
 /** Codex may emit several commentary agentMessages in one turn; keep a blank line between them. */
 function ensureCommentarySegmentBreak(event: any, state: CodexSessionState): void {
   if (event?.type !== 'item.started') return
   if (agentMessageItemPhase(event?.item) !== 'commentary') return
-  const current = state.commentaryText
-  if (!current.trim() || current.endsWith('\n\n')) return
-  state.commentaryText = current.endsWith('\n') ? `${current}\n` : `${current}\n\n`
+  const lastId = lastInsertedKey(state.commentaryByItemId)
+  if (lastId) {
+    const prior = state.commentaryByItemId.get(lastId) ?? ''
+    if (prior.trim() && !prior.endsWith('\n\n')) {
+      state.commentaryByItemId.set(lastId, prior.endsWith('\n') ? `${prior}\n` : `${prior}\n\n`)
+    }
+  } else if (state.harnessCommentaryText.trim() && !state.harnessCommentaryText.endsWith('\n\n')) {
+    state.harnessCommentaryText = state.harnessCommentaryText.endsWith('\n')
+      ? `${state.harnessCommentaryText}\n`
+      : `${state.harnessCommentaryText}\n\n`
+  } else {
+    return
+  }
+  recomposeBuffers(state)
+}
+
+function lastInsertedKey<K>(map: Map<K, unknown>): K | undefined {
+  let last: K | undefined
+  for (const key of map.keys()) last = key
+  return last
 }
 
 function commentaryItemId(event: any): string {
   return String(event?.itemId ?? event?.item_id ?? event?.item?.id ?? '')
-}
-
-function trackCommentaryText(state: CodexSessionState, event: any, delta: string): void {
-  const id = commentaryItemId(event)
-  if (!id) return
-  state.commentaryByItemId.set(id, `${state.commentaryByItemId.get(id) ?? ''}${delta}`)
 }
 
 function upsertThinkingTask(state: CodexSessionState, event: any): void {
@@ -384,10 +438,12 @@ function upsertThinkingTask(state: CodexSessionState, event: any): void {
   if (!id) return
   const body = String(event?.item?.text ?? state.commentaryByItemId.get(id) ?? '').trim()
   if (!body) return
-  const taskId = `thinking-${id}`
-  state.commentaryByItemId.set(id, body)
-  state.taskByUseId.set(taskId, {
-    id: taskId,
+  if (state.commentaryByItemId.get(id) !== body) {
+    state.commentaryByItemId.set(id, body)
+    recomposeBuffers(state)
+  }
+  state.taskByUseId.set(`thinking-${id}`, {
+    id: `thinking-${id}`,
     title: 'Thinking',
     status: 'complete',
     details: [section([text(body)])],
@@ -401,39 +457,176 @@ function completeThinkingTasks(state: CodexSessionState): void {
   }
 }
 
-function activeAssistantBuffer(state: CodexSessionState, event: any): 'commentary' | 'answer' {
+function activeAssistantBuffer(
+  state: CodexSessionState,
+  event: any,
+  agentSessionId: string
+): 'commentary' | 'answer' {
   if (event?.type === 'item.agentMessage.delta' || event?.type === 'item.completed') {
+    const codexId = agentMessageEventId(event)
+    const itemPhase = state.agentMessagePhaseByItemId.get(codexId)
+    if (itemPhase) return itemPhase === 'final_answer' ? 'answer' : 'commentary'
+    if (
+      event?.type === 'item.completed' &&
+      (event?.item?.type === 'agentMessage' || event?.item?.type === 'agent_message') &&
+      state.taskByUseId.size > 0
+    ) {
+      logInfo('slack_codex_unphased_final_agent_message_classified', {
+        agent_session_id: agentSessionId,
+        centaur_thread_key: event?.centaur_thread_key,
+        execution_id: event?.centaur_execution_id,
+        assignment_generation: event?.centaur_assignment_generation,
+        codex_id: codexId,
+        codex_item_id: codexId,
+        codex_item_type: event?.item?.type,
+        codex_session_id: state.threadId || event?.session_id || event?.thread_id,
+        task_count: state.taskByUseId.size,
+        commentary_chars: state.commentaryText.length,
+        answer_chars: state.answerText.length,
+        item_text_chars: String(event?.item?.text ?? '').length
+      })
+      return 'answer'
+    }
     return state.agentMessagePhase === 'final_answer' ? 'answer' : 'commentary'
   }
   return 'answer'
 }
 
-function assistantText(event: any): string {
+function eventCarriesAgentMessageText(event: any): boolean {
+  if (event?.type === 'item.agentMessage.delta') return Boolean(extractDeltaText(event))
+  if (event?.type === 'assistant') return Boolean(assistantTextFromAssistantEvent(event))
+  if (event?.type === 'item.completed') {
+    const itemType = event?.item?.type
+    if (itemType !== 'agentMessage' && itemType !== 'agent_message') return false
+    return Boolean(String(event?.item?.text ?? ''))
+  }
+  return false
+}
+
+type AgentMessageUpdateResult = {
+  bufferChanged: boolean
+  correction?: { previous: string; canonical: string }
+}
+
+function applyAgentMessageUpdate(
+  state: CodexSessionState,
+  event: any,
+  buffer: 'answer' | 'commentary',
+  agentSessionId: string
+): AgentMessageUpdateResult {
+  const itemId = agentMessageEventId(event)
+
   if (event?.type === 'item.agentMessage.delta') {
-    const delta = event.delta ?? event.text ?? event.content ?? ''
-    if (delta && typeof delta === 'object') {
-      return String(delta.text ?? delta.content ?? '')
+    if (!itemId || state.completedItemIds.has(itemId)) return { bufferChanged: false }
+    const delta = extractDeltaText(event)
+    if (!delta) return { bufferChanged: false }
+    const byId = buffer === 'answer' ? state.answerByItemId : state.commentaryByItemId
+    byId.set(itemId, (byId.get(itemId) ?? '') + delta)
+    recomposeBuffers(state)
+    return { bufferChanged: true }
+  }
+
+  if (event?.type === 'item.completed') {
+    const canonical = String(event?.item?.text ?? '')
+    if (!canonical) return { bufferChanged: false }
+    if (!itemId) {
+      // Without an item id we cannot map this canonical text to the per-item buffer it
+      // was meant to replace. Falling back to a flat append would re-introduce the
+      // pre-fix duplication, so we drop and log instead. Codex always emits an id in
+      // observed prod streams; this branch defends against malformed events.
+      logInfo('slack_codex_item_completed_missing_id', {
+        agent_session_id: agentSessionId,
+        centaur_thread_key: event?.centaur_thread_key,
+        execution_id: event?.centaur_execution_id,
+        canonical_text_chars: canonical.length,
+        canonical_hash: textHash(canonical)
+      })
+      return { bufferChanged: false }
     }
-    return String(delta)
+    const byId = buffer === 'answer' ? state.answerByItemId : state.commentaryByItemId
+    const previous = byId.get(itemId) ?? ''
+    state.completedItemIds.add(itemId)
+    if (canonical === previous) return { bufferChanged: false }
+    byId.set(itemId, canonical)
+    recomposeBuffers(state)
+    return {
+      bufferChanged: true,
+      correction: previous ? { previous, canonical } : undefined
+    }
   }
-  if (
-    event?.type === 'item.completed' &&
-    (event?.item?.type === 'agentMessage' || event?.item?.type === 'agent_message')
-  ) {
-    return String(event.item.text ?? '')
+
+  if (event?.type === 'assistant') {
+    const cumulative = assistantTextFromAssistantEvent(event)
+    if (!cumulative) return { bufferChanged: false }
+    const key = buffer === 'answer' ? 'harnessAnswerText' : 'harnessCommentaryText'
+    const before = state[key]
+    if (cumulative === before || before.endsWith(cumulative)) return { bufferChanged: false }
+    state[key] = cumulative.startsWith(before)
+      ? cumulative
+      : before
+        ? `${before}\n${cumulative}`
+        : cumulative
+    recomposeBuffers(state)
+    return { bufferChanged: true }
   }
-  if (event?.type !== 'assistant') return ''
+
+  return { bufferChanged: false }
+}
+
+function recomposeBuffers(state: CodexSessionState): void {
+  state.answerText = compose(state.answerByItemId, state.harnessAnswerText)
+  state.commentaryText = compose(state.commentaryByItemId, state.harnessCommentaryText)
+}
+
+function compose(byItemId: Map<string, string>, trailing: string): string {
+  let out = ''
+  for (const value of byItemId.values()) out += value
+  return trailing ? out + trailing : out
+}
+
+function extractDeltaText(event: any): string {
+  const delta = event?.delta ?? event?.text ?? event?.content ?? ''
+  if (delta && typeof delta === 'object') return String(delta.text ?? delta.content ?? '')
+  return String(delta)
+}
+
+function assistantTextFromAssistantEvent(event: any): string {
   return content(event)
     .map(part => (part?.type === 'text' ? (part.text ?? '') : ''))
     .filter(Boolean)
     .join('')
 }
 
-function messageDelta(current: string, incoming: string): string {
-  if (!current) return incoming
-  if (incoming.startsWith(current)) return incoming.slice(current.length)
-  if (current.endsWith(incoming)) return ''
-  return incoming
+function logCanonicalCorrection(
+  agentSessionId: string,
+  event: any,
+  state: CodexSessionState,
+  correction: { previous: string; canonical: string }
+): void {
+  const { previous, canonical } = correction
+  const charsDiff = canonical.length - previous.length
+  logInfo('slack_codex_canonical_answer_correction', {
+    agent_session_id: agentSessionId,
+    centaur_thread_key: event?.centaur_thread_key,
+    execution_id: event?.centaur_execution_id,
+    assignment_generation: event?.centaur_assignment_generation,
+    event_type: event?.type,
+    codex_id: agentMessageEventId(event),
+    codex_item_id: agentMessageEventId(event),
+    codex_item_type: event?.item?.type,
+    codex_item_phase: event?.item?.phase,
+    codex_session_id: state.threadId || event?.session_id || event?.thread_id,
+    delta_total_chars: previous.length,
+    canonical_text_chars: canonical.length,
+    chars_diff: charsDiff,
+    delta_hash: textHash(previous),
+    canonical_hash: textHash(canonical),
+    streamed_answer_chars: state.deliveredAnswerChars
+  })
+}
+
+function textHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16)
 }
 
 function reasoningText(event: any): string {
@@ -443,6 +636,68 @@ function reasoningText(event: any): string {
 
 function isTerminalTurnEvent(event: any): boolean {
   return event?.type === 'result' || event?.type === 'turn.done' || event?.type === 'turn.completed'
+}
+
+function terminalResultText(event: any): string {
+  for (const key of ['result', 'result_text', 'text', 'final_text']) {
+    const value = event?.[key]
+    if (typeof value !== 'string') continue
+    const text = value.trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function completedState(agentSessionId: string): CompletedCodexSessionState | undefined {
+  const completed = completedStates.get(agentSessionId)
+  if (!completed) return undefined
+  if (Date.now() - completed.completedAt > COMPLETED_STATE_TTL_MS) {
+    completedStates.delete(agentSessionId)
+    return undefined
+  }
+  return completed
+}
+
+function logCodexTerminalEventReceived(
+  agentSessionId: string,
+  event: any,
+  state: CodexSessionState,
+  opts: { resultText: string; willClose: boolean }
+): void {
+  logInfo('slack_codex_terminal_event_received', {
+    agent_session_id: agentSessionId,
+    centaur_thread_key: event?.centaur_thread_key,
+    execution_id: event?.centaur_execution_id,
+    assignment_generation: event?.centaur_assignment_generation,
+    event_type: event?.type,
+    codex_session_id: state.threadId || event?.session_id || event?.thread_id,
+    already_completed: false,
+    will_close: opts.willClose,
+    result_text_chars: opts.resultText.length,
+    answer_chars_before_event: state.answerText.length,
+    streamed_answer_chars_before_event: state.deliveredAnswerChars,
+    task_count: state.taskByUseId.size
+  })
+}
+
+function logCodexTerminalEventIgnoredAfterDone(
+  agentSessionId: string,
+  event: any,
+  completed: CompletedCodexSessionState
+): void {
+  logInfo('slack_codex_terminal_event_ignored_after_done', {
+    agent_session_id: agentSessionId,
+    centaur_thread_key: event?.centaur_thread_key,
+    execution_id: event?.centaur_execution_id,
+    assignment_generation: event?.centaur_assignment_generation,
+    event_type: event?.type,
+    codex_session_id: completed.threadId || event?.session_id || event?.thread_id,
+    already_completed: true,
+    will_close: false,
+    result_text_chars: terminalResultText(event).length,
+    streamed_answer_chars_at_completion: completed.streamedAnswerChars,
+    completed_age_ms: Date.now() - completed.completedAt
+  })
 }
 
 function toolUses(event: any): any[] {

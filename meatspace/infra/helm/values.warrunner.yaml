@@ -32,6 +32,9 @@ api:
 ironProxy:
   secretSource: env
 
+toolServer:
+  enabled: true
+
 slackbot:
   enabled: false
 
