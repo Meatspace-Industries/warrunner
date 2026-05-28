@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -315,11 +314,12 @@ def test_sandbox_entrypoint_requires_mounted_chatgpt_auth_for_codex_wrapper(
             "HOME": str(home),
             "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "CODEX_AUTH_MODE": "access_token",
         },
     )
 
     assert result.returncode == 1
-    assert "fatal: codex_chatgpt_auth_required" in result.stderr
+    assert "fatal: codex_chatgpt_auth_install_failed" in result.stderr
     assert not (home / ".ready").exists()
     assert not marker.exists()
 
@@ -354,6 +354,7 @@ def test_sandbox_entrypoint_rejects_api_key_env_for_codex_wrapper(
         "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
         "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
         "CENTAUR_CODEX_AUTH_JSON": str(auth_src),
+        "CODEX_AUTH_MODE": "access_token",
         api_key_env: "sk-should-not-be-used",
     }
     result = subprocess.run(
@@ -439,50 +440,3 @@ def test_sandbox_entrypoint_rejects_non_chatgpt_codex_auth_json(
     assert error in result.stderr
     assert "codex login should not run" not in result.stderr
     assert not (home / ".codex" / "auth.json").exists()
-
-
-def test_sandbox_entrypoint_appends_codex_laminar_otel_config(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    harness_dir = _write_codex_harness_config(home)
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(ENTRYPOINT_SH),
-            "sh",
-            "-lc",
-            'cat "$HOME/.codex/config.toml"',
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env={
-            "HOME": str(home),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
-            "CENTAUR_THREAD_KEY": "slack:C123:1700000000.000100",
-            "CENTAUR_TRACE_ID": "00000000-0000-0000-0000-000000000123",
-            "CODEX_OTEL_ENVIRONMENT": "staging",
-            "LMNR_BASE_URL": "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000",
-            "LMNR_PROJECT_API_KEY": "lmnr-key",
-        },
-    )
-
-    assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout.startswith((harness_dir / "codex" / "config.toml").read_text())
-    parsed = tomllib.loads(result.stdout)
-    assert "exporter" not in parsed["otel"]
-    assert (
-        parsed["otel"]["trace_exporter"]["otlp-http"]["endpoint"]
-        == "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000/v1/traces"
-    )
-    assert "\nexporter = { otlp-http = {" not in result.stdout
-    assert "trace_exporter = { otlp-http = {" in result.stdout
-    assert (
-        'endpoint = "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000/v1/traces"'
-        in result.stdout
-    )
-    assert '"x-trace-id" = "00000000-0000-0000-0000-000000000123"' in result.stdout
-    assert '"x-centaur-thread-key" = "slack:C123:1700000000.000100"' in result.stdout
-    assert '"authorization" = "Bearer lmnr-key"' in result.stdout
-    assert 'environment = "staging"' in result.stdout

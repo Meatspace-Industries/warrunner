@@ -12,10 +12,10 @@ import re
 import secrets as _secrets
 import time
 import uuid
-from collections.abc import AsyncIterator
-from pathlib import Path
+from collections.abc import AsyncIterator, Mapping
+from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from aiohttp import WSMsgType
 from kubernetes_asyncio import client, config
@@ -29,6 +29,7 @@ from kubernetes_asyncio.stream.ws_client import (
 )
 import structlog
 
+from api.broker_config import render_broker_yaml
 from api.proxy_config import (
     assign_pg_listen_ports,
     render_proxy_yaml,
@@ -45,6 +46,7 @@ from api.sandbox.config import (
     harness_resume_env,
     image,
     runtime_for_session,
+    sandbox_extra_env_map,
 )
 from api.sandbox.prompt_assembly import assemble_prompt
 from api.tool_manager import (
@@ -65,6 +67,7 @@ _AGENT_UID = 1001
 _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
 _CODEX_AUTH_MOUNT_DIR = "/home/agent/codex-auth"
+_WORKFLOW_RUN_OVERLAY_DIR = "/app/overlay/org"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
@@ -73,6 +76,12 @@ _GITHUB_TOKEN_REPOSITORY_REQUIRED = "github-app-repository-scope-required"
 _GITHUB_BASIC_AUTH_REPOSITORY_REQUIRED = (
     "github-app-basic-auth-repository-scope-required"
 )
+# iron-token-broker resource names. The chart provisions the matching Service
+# + NetworkPolicies under the same name; ensure_token_broker() applies the
+# Deployment + ConfigMap so the broker config can be regenerated without a
+# Helm upgrade. The label keeps the chart-side NetworkPolicy selector
+# wired up.
+_TOKEN_BROKER_LABEL = "centaur.ai/iron-token-broker"
 
 
 def _get_rt(session: SandboxSession):
@@ -120,6 +129,11 @@ def _service_account_name() -> str | None:
     return value or None
 
 
+def _state_volume_enabled() -> bool:
+    value = (os.getenv("KUBERNETES_SANDBOX_STATE_VOLUME_ENABLED") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _env_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
     return int(raw) if raw else default
@@ -137,8 +151,166 @@ def _proxy_health_port() -> int:
     return _env_int("KUBERNETES_IRON_PROXY_HEALTH_PORT", 9090)
 
 
+def _op_connect_app_name() -> str:
+    return os.getenv("KUBERNETES_OP_CONNECT_APP_NAME", "onepassword-connect").strip()
+
+
+def _op_connect_port() -> int:
+    return _env_int("KUBERNETES_OP_CONNECT_PORT", 8080)
+
+
+def _uses_op_connect_secret_source() -> bool:
+    return (
+        os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+        == "onepassword-connect"
+    )
+
+
 def _proxy_image() -> str:
     return os.getenv("KUBERNETES_IRON_PROXY_IMAGE", "centaur-iron-proxy:latest")
+
+
+def _tool_server_image() -> str | None:
+    """Tool-server sidecar image.
+
+    When set, sandbox Pods get a ``tool-server`` sidecar that exposes
+    ``/tools/*`` on loopback. Sandboxes call ``http://localhost:<port>``
+    instead of routing tool calls back to the API.
+    """
+    value = (os.getenv("KUBERNETES_TOOL_SERVER_IMAGE") or "").strip()
+    return value or None
+
+
+def _tool_server_image_pull_policy() -> str:
+    return (
+        os.getenv("KUBERNETES_TOOL_SERVER_IMAGE_PULL_POLICY") or _image_pull_policy()
+    ).strip()
+
+
+def _tool_server_port() -> int:
+    return _env_int("KUBERNETES_TOOL_SERVER_PORT", 8001)
+
+
+def _workflow_run_image() -> str:
+    """Image used for per-run workflow execution pods.
+
+    Defaults to ``KUBERNETES_WORKFLOW_RUN_IMAGE`` (Helm injects the api image
+    by default) and falls back to ``centaur-api:latest`` for local runs.
+    """
+    return os.getenv("KUBERNETES_WORKFLOW_RUN_IMAGE", "centaur-api:latest")
+
+
+def _workflow_run_image_pull_policy() -> str:
+    return (
+        os.getenv("KUBERNETES_WORKFLOW_RUN_IMAGE_PULL_POLICY") or _image_pull_policy()
+    ).strip()
+
+
+def _workflow_run_pod_name(run_id: str) -> str:
+    return _resource_name("centaur-centaur-workflow-run", run_id)
+
+
+_WORKFLOW_RUN_PASSTHROUGH_ENV_NAMES = (
+    "CENTAUR_OVERLAY_DIR",
+    "DISCORD_API_URL",
+    "DISCORD_GUILD_ID",
+    "DISCORD_ETL_ENABLED",
+    "DISCORD_SYNC_INTERVAL_SECONDS",
+    "DISCORD_BACKFILL_INTERVAL_SECONDS",
+    "DISCORD_BACKFILL_CHANNEL_BATCH_LIMIT",
+    "DISCORD_BACKFILL_PAGES_PER_JOB",
+    "DISCORD_SYNC_RECENT_LIMIT",
+    "DISCORD_SYNC_PAGES_PER_CHANNEL",
+    "DISCORD_CONTEXT_DOCUMENTS_INTERVAL_SECONDS",
+    "DISCORD_ETL_PERMISSION_MODE",
+    "DISCORD_ETL_EXCLUDED_CHANNEL_IDS",
+    "DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS",
+    "DISCORD_ETL_EXCLUDED_CATEGORY_PATTERNS",
+    "DISCORD_ETL_ALLOWED_CATEGORY_IDS",
+    "DISCORD_ETL_ALLOWED_CATEGORY_PATTERNS",
+    "DISCORD_ETL_TYPICAL_CATEGORY_MIN_COUNT",
+)
+
+
+def _tool_server_tool_dirs(*, overlay_mount: str | None = None) -> str:
+    """TOOL_DIRS the sidecar uses. Mirrors the API's TOOL_DIRS by default."""
+    value = (os.getenv("KUBERNETES_TOOL_SERVER_TOOL_DIRS") or "").strip()
+    if value:
+        return value
+    if overlay_mount:
+        return f"/app/tools:{overlay_mount.rstrip('/')}/org/tools"
+    return (os.getenv("TOOL_DIRS") or "/app/tools").strip() or "/app/tools"
+
+
+def _workflow_run_overlay_dir() -> str:
+    value = (os.getenv("CENTAUR_OVERLAY_DIR") or "").strip()
+    return value or _WORKFLOW_RUN_OVERLAY_DIR
+
+
+def _workflow_run_secret_env_names() -> list[str]:
+    raw = (os.getenv("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS") or "").strip()
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw.split(","):
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _api_database_pg_secret() -> PgDsnSecret | None:
+    database_url = (os.getenv("DATABASE_URL") or "").strip()
+    if not database_url:
+        return None
+    database = unquote((urlsplit(database_url).path or "").lstrip("/")).strip()
+    if not database:
+        return None
+    return PgDsnSecret(
+        name="DATABASE_URL",
+        secret_ref="DATABASE_URL",
+        database=database,
+    )
+
+
+def _with_api_database_pg_secret(secrets: list[SecretDef]) -> list[SecretDef]:
+    if any(
+        isinstance(secret, PgDsnSecret) and secret.name == "DATABASE_URL"
+        for secret in secrets
+    ):
+        return list(secrets)
+    database_secret = _api_database_pg_secret()
+    if database_secret is None:
+        return list(secrets)
+    return [*secrets, database_secret]
+
+
+def _token_broker_name() -> str:
+    return (os.getenv("KUBERNETES_TOKEN_BROKER_NAME") or "").strip()
+
+
+def _token_broker_url() -> str:
+    return (os.getenv("KUBERNETES_TOKEN_BROKER_URL") or "").strip()
+
+
+def _token_broker_enabled() -> bool:
+    """Whether the iron-token-broker is deployed in this cluster.
+
+    Gated on the chart-set ``KUBERNETES_TOKEN_BROKER_URL`` (present only when
+    ``tokenBroker.enabled=true``). Routing through the broker is opt-in per
+    secret via the ``brokered_token`` type; this flag just controls whether
+    iron-proxy receives broker env and whether the API reconciles the broker
+    ConfigMap.
+    """
+    return bool(_token_broker_url())
+
+
+def _token_broker_configmap_name() -> str:
+    name = _token_broker_name()
+    return f"{name}-config" if name else ""
 
 
 def _proxy_image_pull_policy() -> str:
@@ -270,10 +442,7 @@ def _proxy_iron_env(
             },
         }
     ]
-    if (
-        os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
-        == "onepassword-connect"
-    ):
+    if _uses_op_connect_secret_source():
         connect_host = os.getenv("KUBERNETES_OP_CONNECT_HOST", "").strip()
         if connect_host:
             env.append({"name": "OP_CONNECT_HOST", "value": connect_host})
@@ -284,6 +453,23 @@ def _proxy_iron_env(
                     "secretKeyRef": {
                         "name": secret_name,
                         "key": _secret_env_key("OP_CONNECT_TOKEN"),
+                    }
+                },
+            }
+        )
+    broker_url = _token_broker_url()
+    if broker_url:
+        env.append({"name": "IRON_BROKER_URL", "value": broker_url})
+        # The broker's bearer token lives alongside other infra secrets in
+        # the centaur-infra-env Secret. Mirror IRON_MANAGEMENT_API_KEY's
+        # shape so the operator only needs to bootstrap one secret manifest.
+        env.append(
+            {
+                "name": "IRON_BROKER_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": _secret_env_key("IRON_BROKER_TOKEN"),
                     }
                 },
             }
@@ -396,6 +582,138 @@ def _firewall_ca_key_secret_name() -> str:
             "KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME is required for per-sandbox proxy"
         )
     return value
+
+
+def _build_tool_server_container(
+    *,
+    firewall_host: str,
+    api_url: str,
+    overlay_mount: str | None,
+    pg_dsns: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build the tool-server sidecar container spec.
+
+    The sidecar listens on loopback inside the sandbox Pod and routes its own
+    HTTP egress through the per-sandbox iron-proxy. Caller is responsible for
+    only invoking this when ``_tool_server_image()`` is set.
+    """
+    image_ref = _tool_server_image()
+    if not image_ref:
+        raise RuntimeError("_build_tool_server_container called without an image")
+
+    secret_name = _secret_env_name()
+    proxy_url = f"http://{firewall_host}:{_proxy_port()}"
+    api_host = urlsplit(api_url).hostname or ""
+    no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
+    if api_host:
+        no_proxy_hosts.append(api_host)
+    no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
+
+    database_url = (pg_dsns or {}).get("DATABASE_URL")
+    env: list[dict[str, Any]] = [
+        {
+            "name": "SANDBOX_SIGNING_KEY",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": secret_name,
+                    "key": _secret_env_key("SANDBOX_SIGNING_KEY"),
+                }
+            },
+        },
+        {"name": "HTTPS_PROXY", "value": proxy_url},
+        {"name": "HTTP_PROXY", "value": proxy_url},
+        {"name": "https_proxy", "value": proxy_url},
+        {"name": "http_proxy", "value": proxy_url},
+        {"name": "NO_PROXY", "value": no_proxy},
+        {"name": "no_proxy", "value": no_proxy},
+        {"name": "REQUESTS_CA_BUNDLE", "value": "/firewall-certs/ca-cert.pem"},
+        {"name": "SSL_CERT_FILE", "value": "/firewall-certs/ca-cert.pem"},
+        {"name": "NODE_EXTRA_CA_CERTS", "value": "/firewall-certs/ca-cert.pem"},
+        {"name": "CENTAUR_API_URL", "value": api_url},
+        {
+            "name": "TOOL_DIRS",
+            "value": _tool_server_tool_dirs(overlay_mount=overlay_mount),
+        },
+        {"name": "PLUGIN_WATCHER_ENABLED", "value": "0"},
+    ]
+    if database_url:
+        env.insert(0, {"name": "DATABASE_URL", "value": database_url})
+    else:
+        env.insert(
+            0,
+            {
+                "name": "DATABASE_URL",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": _secret_env_key("DATABASE_URL"),
+                    }
+                },
+            },
+        )
+    for name, dsn in sorted((pg_dsns or {}).items()):
+        if name == "DATABASE_URL":
+            continue
+        env.append({"name": name, "value": dsn})
+
+    volume_mounts: list[dict[str, Any]] = [
+        {
+            "name": "firewall-ca",
+            "mountPath": "/firewall-certs",
+            "readOnly": True,
+        },
+    ]
+    if overlay_mount:
+        volume_mounts.append(
+            {
+                "name": "overlay-root",
+                "mountPath": overlay_mount,
+                "readOnly": True,
+            }
+        )
+
+    port = _tool_server_port()
+    # Bind the listener on 0.0.0.0 inside the pod's network namespace. The
+    # sandbox container reaches it via 127.0.0.1 (shared loopback within the
+    # pod); kubelet probes reach it via the pod IP. Listening only on
+    # 127.0.0.1 would block liveness probes — the kubelet runs on the node
+    # and can't see the container's loopback interface — and the resulting
+    # probe failures would kill the sidecar.
+    return {
+        "name": "tool-server",
+        "image": image_ref,
+        "imagePullPolicy": _tool_server_image_pull_policy(),
+        # Same image as the API; different uvicorn target.
+        "command": ["/app/.venv/bin/uvicorn"],
+        "args": [
+            "api.tool_server_app:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(port),
+        ],
+        "env": env,
+        "ports": [{"containerPort": port, "name": "tools"}],
+        "readinessProbe": {
+            "httpGet": {"path": "/healthz", "port": port},
+            "periodSeconds": 5,
+            "failureThreshold": 30,
+        },
+        "livenessProbe": {
+            "httpGet": {"path": "/healthz", "port": port},
+            "periodSeconds": 30,
+            "failureThreshold": 5,
+        },
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"]},
+            "runAsGroup": _AGENT_UID,
+            "runAsNonRoot": True,
+            "runAsUser": _AGENT_UID,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "volumeMounts": volume_mounts,
+    }
 
 
 def _resource_name(prefix: str, raw: str, *, max_length: int = 63) -> str:
@@ -672,10 +990,37 @@ class KubernetesExecutorBackend(SandboxBackend):
             if pod_name:
                 await self._delete_pod(pod_name)
 
+    def _configure_workload_volumes(
+        self,
+        volume_mounts: list[dict[str, Any]],
+        volumes: list[dict[str, Any]],
+    ) -> None:
+        if _state_volume_enabled():
+            raise ValueError(
+                "KUBERNETES_SANDBOX_STATE_VOLUME_ENABLED requires "
+                "KUBERNETES_SANDBOX_CONTROLLER=agent-sandbox"
+            )
+
+    async def _delete_existing_workload(self, pod_name: str) -> None:
+        await self._delete_pod(pod_name)
+
+    async def _create_workload(self, pod_spec: dict[str, Any]) -> None:
+        await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
+
+    async def _cleanup_workload_after_create_error(self, pod_name: str) -> None:
+        await self._delete_pod(pod_name)
+
     def _collect_secrets(self) -> list[SecretDef]:
         from api.app import get_tool_manager
 
         return get_tool_manager().collect_secrets()
+
+    def _secrets_for_sandbox(
+        self, engine: str, auth_modes: Mapping[str, str]
+    ) -> list[SecretDef]:
+        from api.app import get_tool_manager
+
+        return get_tool_manager().secrets_for_sandbox(engine, auth_modes)
 
     def _resolved_pg_secrets(
         self, secrets: list[SecretDef]
@@ -803,6 +1148,32 @@ class KubernetesExecutorBackend(SandboxBackend):
         for _, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
             sandbox_to_proxy_ports.append({"protocol": "TCP", "port": port})
 
+        proxy_egress = [
+            {
+                "to": [{"podSelector": {"matchLabels": _api_pod_match_labels()}}],
+                "ports": [{"protocol": "TCP", "port": 8000}],
+            },
+            {
+                "ports": [{"protocol": "TCP", "port": 443}],
+            },
+            {
+                "ports": [{"protocol": "TCP", "port": 5432}],
+            },
+        ]
+        if _uses_op_connect_secret_source():
+            proxy_egress.append(
+                {
+                    "to": [
+                        {
+                            "podSelector": {
+                                "matchLabels": {"app": _op_connect_app_name()}
+                            }
+                        }
+                    ],
+                    "ports": [{"protocol": "TCP", "port": _op_connect_port()}],
+                }
+            )
+
         await self._networking_api().create_namespaced_network_policy(
             _namespace(),
             {
@@ -884,24 +1255,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                             "ports": sandbox_to_proxy_ports,
                         }
                     ],
-                    "egress": [
-                        {
-                            "to": [
-                                {
-                                    "podSelector": {
-                                        "matchLabels": _api_pod_match_labels()
-                                    }
-                                }
-                            ],
-                            "ports": [{"protocol": "TCP", "port": 8000}],
-                        },
-                        {
-                            "ports": [{"protocol": "TCP", "port": 443}],
-                        },
-                        {
-                            "ports": [{"protocol": "TCP", "port": 5432}],
-                        },
-                    ],
+                    "egress": proxy_egress,
                 },
             },
         )
@@ -1130,7 +1484,19 @@ class KubernetesExecutorBackend(SandboxBackend):
     async def _wait_ready(self, pod_name: str) -> float:
         deadline = time.monotonic() + _READY_TIMEOUT_S
         while time.monotonic() < deadline:
-            pod = await self._core_api().read_namespaced_pod(pod_name, _namespace())
+            try:
+                pod = await self._core_api().read_namespaced_pod(pod_name, _namespace())
+            except Exception as exc:
+                if self._is_not_found(exc):
+                    await asyncio.sleep(0.5)
+                    continue
+                raise
+            if (
+                getattr(getattr(pod, "metadata", None), "deletion_timestamp", None)
+                is not None
+            ):
+                await asyncio.sleep(0.5)
+                continue
             phase = (pod.status.phase or "").lower()
             if phase in {"failed", "succeeded"}:
                 raise RuntimeError(f"sandbox pod exited before ready (phase={phase})")
@@ -1179,7 +1545,10 @@ class KubernetesExecutorBackend(SandboxBackend):
         secret_name = _prompt_secret_name(pod_name)
         firewall_host = _proxy_service_name(pod_name)
 
-        secrets = self._collect_secrets()
+        tool_server_image = _tool_server_image()
+        secrets = self._secrets_for_sandbox(engine, sandbox_extra_env_map())
+        if tool_server_image:
+            secrets = _with_api_database_pg_secret(secrets)
         _validate_github_app_secret_source(secrets)
         pg_listen_ports = assign_pg_listen_ports(secrets)
         pg_secrets = self._resolved_pg_secrets(secrets)
@@ -1342,7 +1711,49 @@ class KubernetesExecutorBackend(SandboxBackend):
                 }
             )
 
+        self._configure_workload_volumes(volume_mounts, volumes)
+
         cmd = build_harness_cmd(engine, model)
+
+        containers: list[dict[str, Any]] = [
+            {
+                "name": _CONTAINER_NAME,
+                "image": image(),
+                "imagePullPolicy": _image_pull_policy(),
+                "args": cmd,
+                "stdin": True,
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "capabilities": {"drop": ["ALL"]},
+                    "runAsGroup": _AGENT_UID,
+                    "runAsNonRoot": True,
+                    "runAsUser": _AGENT_UID,
+                    "seccompProfile": {"type": "RuntimeDefault"},
+                },
+                "tty": False,
+                "workingDir": "/home/agent",
+                "env": [
+                    {
+                        "name": item.split("=", 1)[0],
+                        "value": item.split("=", 1)[1],
+                    }
+                    for item in env
+                ],
+                "resources": _pod_resources(),
+                "volumeMounts": volume_mounts,
+            }
+        ]
+        if tool_server_image:
+            containers.append(
+                _build_tool_server_container(
+                    firewall_host=firewall_host,
+                    api_url=os.getenv("AGENT_API_URL", "http://api:8000"),
+                    overlay_mount=(
+                        _SANDBOX_OVERLAY_ROOT if overlay_image else None
+                    ),
+                    pg_dsns=sandbox_pg_dsns,
+                )
+            )
 
         pod_spec: dict[str, Any] = {
             "apiVersion": "v1",
@@ -1360,34 +1771,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                 "automountServiceAccountToken": False,
                 "restartPolicy": "Never",
                 "initContainers": init_containers,
-                "containers": [
-                    {
-                        "name": _CONTAINER_NAME,
-                        "image": image(),
-                        "imagePullPolicy": _image_pull_policy(),
-                        "args": cmd,
-                        "stdin": True,
-                        "securityContext": {
-                            "allowPrivilegeEscalation": False,
-                            "capabilities": {"drop": ["ALL"]},
-                            "runAsGroup": _AGENT_UID,
-                            "runAsNonRoot": True,
-                            "runAsUser": _AGENT_UID,
-                            "seccompProfile": {"type": "RuntimeDefault"},
-                        },
-                        "tty": False,
-                        "workingDir": "/home/agent",
-                        "env": [
-                            {
-                                "name": item.split("=", 1)[0],
-                                "value": item.split("=", 1)[1],
-                            }
-                            for item in env
-                        ],
-                        "resources": _pod_resources(),
-                        "volumeMounts": volume_mounts,
-                    }
-                ],
+                "containers": containers,
                 "volumes": volumes,
             },
         }
@@ -1402,7 +1786,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         if service_account_name:
             pod_spec["spec"]["serviceAccountName"] = service_account_name
 
-        await self._delete_pod(pod_name)
+        await self._delete_existing_workload(pod_name)
         await self._delete_proxy_resources(pod_name)
         github_token_expires_at = 0.0
         try:
@@ -1474,7 +1858,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                 proxy_secret_overrides,
             )
             await self._wait_pod_ready(proxy_pod_name)
-            await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
+            await self._create_workload(pod_spec)
             await self._wait_ready(pod_name)
         except BaseException:
             # Catch BaseException so asyncio.CancelledError (e.g. from
@@ -1482,7 +1866,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             # otherwise the partially created pod, proxy pod, service,
             # network policies, and prompt secret leak.
             with contextlib.suppress(Exception):
-                await self._delete_pod(pod_name)
+                await self._cleanup_workload_after_create_error(pod_name)
             with contextlib.suppress(Exception):
                 await self._delete_proxy_resources(pod_name)
             with contextlib.suppress(Exception):
@@ -1815,6 +2199,290 @@ class KubernetesExecutorBackend(SandboxBackend):
             f"deployment readiness timed out after {_READY_TIMEOUT_S}s: {name}"
         )
 
+    # ── Workflow-run sandboxes (one-shot Pods) ─────────────────────────
+
+    def _build_workflow_run_pod_spec(
+        self,
+        run_id: str,
+        *,
+        firewall_host: str,
+        pg_dsns: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Pod spec for a single workflow execution.
+
+        The pod runs ``python -m api.workflow_executor --run-id <run_id>``
+        against the API image, exits when the handler returns, and routes
+        outbound HTTP through its own per-run iron-proxy at
+        ``firewall_host``. Lifecycle is one-shot: ``restartPolicy: Never``.
+        """
+        secret_name = _secret_env_name()
+        pod_name = _workflow_run_pod_name(run_id)
+
+        api_url = os.getenv("AGENT_API_URL", "http://api:8000")
+        proxy_url = f"http://{firewall_host}:{_proxy_port()}"
+        api_host = urlsplit(api_url).hostname or ""
+        no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
+        if api_host:
+            no_proxy_hosts.append(api_host)
+        no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
+        tool_dirs = (os.getenv("TOOL_DIRS") or "/app/tools").strip()
+        workflow_dirs = (os.getenv("WORKFLOW_DIRS") or "/app/workflows").strip()
+
+        database_url = (pg_dsns or {}).get("DATABASE_URL")
+        env: list[dict[str, Any]] = [
+            {
+                "name": "SANDBOX_SIGNING_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": _secret_env_key("SANDBOX_SIGNING_KEY"),
+                    }
+                },
+            },
+            {"name": "CENTAUR_API_URL", "value": api_url},
+            {"name": "AGENT_API_URL", "value": api_url},
+            {"name": "HTTPS_PROXY", "value": proxy_url},
+            {"name": "HTTP_PROXY", "value": proxy_url},
+            {"name": "https_proxy", "value": proxy_url},
+            {"name": "http_proxy", "value": proxy_url},
+            {"name": "NO_PROXY", "value": no_proxy},
+            {"name": "no_proxy", "value": no_proxy},
+            {"name": "REQUESTS_CA_BUNDLE", "value": "/firewall-certs/ca-cert.pem"},
+            {"name": "SSL_CERT_FILE", "value": "/firewall-certs/ca-cert.pem"},
+            {"name": "NODE_EXTRA_CA_CERTS", "value": "/firewall-certs/ca-cert.pem"},
+            {"name": "FIREWALL_HOST", "value": firewall_host},
+            {"name": "TOOL_DIRS", "value": tool_dirs},
+            {"name": "WORKFLOW_DIRS", "value": workflow_dirs},
+            {"name": "PLUGIN_WATCHER_ENABLED", "value": "0"},
+            {"name": "CENTAUR_WORKFLOW_RUN_ID", "value": run_id},
+            {"name": "ASYNCPG_POOL_RESET_MODE", "value": "noop"},
+        ]
+        if database_url:
+            env.insert(0, {"name": "DATABASE_URL", "value": database_url})
+        else:
+            env.insert(
+                0,
+                {
+                    "name": "DATABASE_URL",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": secret_name,
+                            "key": _secret_env_key("DATABASE_URL"),
+                        }
+                    },
+                },
+            )
+        for name, dsn in sorted((pg_dsns or {}).items()):
+            if name == "DATABASE_URL":
+                continue
+            env.append({"name": name, "value": dsn})
+        existing_env_names = {item["name"] for item in env}
+        for name in _WORKFLOW_RUN_PASSTHROUGH_ENV_NAMES:
+            if name in os.environ and name not in existing_env_names:
+                env.append({"name": name, "value": os.environ[name]})
+                existing_env_names.add(name)
+        for name in _workflow_run_secret_env_names():
+            if name not in existing_env_names:
+                env.append(_secret_ref_env(secret_name, name, optional=False))
+                existing_env_names.add(name)
+
+        volume_mounts: list[dict[str, Any]] = [
+            {
+                "name": "firewall-ca",
+                "mountPath": "/firewall-certs",
+                "readOnly": True,
+            }
+        ]
+        volumes: list[dict[str, Any]] = [
+            {
+                "name": "firewall-ca",
+                "secret": {"secretName": _firewall_ca_secret_name()},
+            }
+        ]
+        init_containers: list[dict[str, Any]] = []
+        overlay_image = _overlay_image()
+        if overlay_image:
+            overlay_target = _workflow_run_overlay_dir()
+            overlay_mount = str(PurePosixPath(overlay_target).parent)
+            volume_mounts.append(
+                {
+                    "name": "overlay-root",
+                    "mountPath": overlay_mount,
+                    "readOnly": True,
+                }
+            )
+            volumes.append({"name": "overlay-root", "emptyDir": {}})
+            init_containers.append(
+                {
+                    "name": "overlay-bootstrap",
+                    "image": overlay_image,
+                    "imagePullPolicy": _overlay_image_pull_policy(),
+                    "command": [
+                        "/bin/sh",
+                        "-ec",
+                        (
+                            f'src="{_overlay_image_source_path()}"\n'
+                            f'target="{overlay_target}"\n'
+                            'mkdir -p "$target"\n'
+                            'cp -R "$src"/. "$target"/'
+                        ),
+                    ],
+                    "volumeMounts": [
+                        {
+                            "name": "overlay-root",
+                            "mountPath": overlay_mount,
+                        }
+                    ],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                }
+            )
+
+        spec: dict[str, Any] = {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": False,
+            "imagePullSecrets": _image_pull_secrets(),
+            "initContainers": init_containers,
+            "containers": [
+                {
+                    "name": "workflow-executor",
+                    "image": _workflow_run_image(),
+                    "imagePullPolicy": _workflow_run_image_pull_policy(),
+                    "command": ["/app/.venv/bin/python"],
+                    "args": [
+                        "-m",
+                        "api.workflow_executor",
+                        "--run-id",
+                        run_id,
+                    ],
+                    "env": env,
+                    # Match the API container's security profile (the
+                    # api image runs as root; see services/api/Dockerfile).
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "resources": _pod_resources(),
+                    "volumeMounts": volume_mounts,
+                }
+            ],
+            "volumes": volumes,
+        }
+        service_account = _service_account_name()
+        if service_account:
+            spec["serviceAccountName"] = service_account
+        return {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                # The per-pod iron-proxy's ingress NetworkPolicy matches on
+                # ``centaur.ai/managed=true`` + ``centaur.ai/sandbox-id=<id>``,
+                # so reuse those labels with the workflow run's pod name as
+                # the sandbox id.
+                "labels": {
+                    "centaur.ai/managed": "true",
+                    "centaur.ai/sandbox-id": pod_name,
+                    "centaur.ai/component": "workflow-run",
+                    "centaur.ai/workflow-run-id": run_id,
+                },
+                "annotations": {
+                    "centaur.ai/workflow-run-id": run_id,
+                },
+            },
+            "spec": spec,
+        }
+
+    async def spawn_workflow_run(self, run_id: str) -> str:
+        """Provision a per-run sandbox (iron-proxy + executor pod).
+
+        Mirrors the agent-sandbox bring-up: ConfigMap, Service, NetworkPolicies,
+        iron-proxy Pod, then the executor Pod. The executor reaches its
+        iron-proxy at the per-run Service via HTTPS_PROXY; the network
+        policies whitelist it by ``centaur.ai/sandbox-id`` label.
+        """
+        await self._ensure_clients()
+        pod_name = _workflow_run_pod_name(run_id)
+        # The proxy helpers key everything off a string id; reuse the
+        # executor pod name so cleanup picks up the right resources.
+        proxy_id = pod_name
+        firewall_host = _proxy_service_name(proxy_id)
+        secrets = _with_api_database_pg_secret(self._collect_secrets())
+        pg_listen_ports = assign_pg_listen_ports(secrets)
+        pg_secrets = self._resolved_pg_secrets(secrets)
+        workflow_pg_dsns = {
+            secret.name: _build_proxied_pg_url(
+                firewall_host,
+                pg_listen_ports[secret.name],
+                proxy_password,
+                secret.database,
+            )
+            for secret, proxy_password in pg_secrets
+        }
+        pod_spec = self._build_workflow_run_pod_spec(
+            run_id,
+            firewall_host=firewall_host,
+            pg_dsns=workflow_pg_dsns,
+        )
+
+        # If a previous attempt for this run_id left resources behind, clear
+        # them before creating fresh ones.
+        await self._delete_pod(pod_name)
+        await self._delete_proxy_resources(proxy_id)
+        try:
+            await self._create_proxy_configmap(proxy_id, secrets, pg_listen_ports)
+            await self._create_proxy_service(proxy_id, pg_listen_ports)
+            await self._create_proxy_network_policies(proxy_id, pg_listen_ports)
+            proxy_pod_name = await self._create_proxy_pod(
+                proxy_id,
+                secrets,
+                pg_secrets,
+                pg_listen_ports,
+            )
+            await self._wait_pod_ready(proxy_pod_name)
+            try:
+                await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
+            except Exception as exc:
+                # Idempotent: an existing pod for the same run_id is fine.
+                if getattr(exc, "status", None) != 409:
+                    raise
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self._delete_pod(pod_name)
+            with contextlib.suppress(Exception):
+                await self._delete_proxy_resources(proxy_id)
+            raise
+        return pod_name
+
+    async def wait_workflow_run_terminal(self, pod_name: str) -> str:
+        """Block until the workflow-run pod terminates; return its phase."""
+        await self._ensure_clients()
+        backoff = 0.5
+        while True:
+            try:
+                pod = await self._core_api().read_namespaced_pod(
+                    pod_name, _namespace()
+                )
+            except Exception as exc:
+                if self._is_not_found(exc):
+                    return "gone"
+                raise
+            phase = (pod.status.phase or "").lower()
+            if phase in {"succeeded", "failed"}:
+                return phase
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 1.5, 5.0)
+
+    async def cleanup_workflow_run_pod(self, pod_name: str) -> None:
+        """Delete a workflow-run pod and its per-run iron-proxy (idempotent)."""
+        await self._ensure_clients()
+        await self._delete_pod(pod_name)
+        await self._delete_proxy_resources(pod_name)
+
     async def ensure_api_proxy_pod(self) -> None:
         """Create or update the API server's iron-proxy Deployment.
 
@@ -1854,6 +2522,11 @@ class KubernetesExecutorBackend(SandboxBackend):
             rendered,
         )
         await self._create_proxy_service(_API_PROXY_SANDBOX_ID, pg_listen_ports)
+        # Reconcile the iron-token-broker BEFORE the proxy rollout so the
+        # proxy pods don't briefly point at a broker whose config hasn't
+        # caught up with the latest refresh-token secret set.
+        if _token_broker_enabled():
+            await self._ensure_token_broker(secrets)
         await self._apply_api_proxy_deployment(
             secrets, pg_secrets, pg_listen_ports, config_hash
         )
@@ -1864,6 +2537,103 @@ class KubernetesExecutorBackend(SandboxBackend):
             config_hash=config_hash,
             pg_secrets=[s.name for s, _ in pg_secrets],
         )
+
+    async def _ensure_token_broker(self, secrets: list[SecretDef]) -> None:
+        """Reconcile the iron-token-broker ConfigMap and trigger a rollout.
+
+        The chart owns the broker Deployment, Service, and NetworkPolicies;
+        the API only writes the ConfigMap content (one credentials[] entry
+        per registered ``BrokeredTokenSecret``). When the rendered content
+        changes, patch the chart-managed Deployment's pod-template with a
+        fresh ``centaur.ai/config-hash`` annotation so kubectl rolls it out
+        — same effect as ``kubectl rollout restart`` but idempotent on no-op
+        reconciles.
+        """
+        name = _token_broker_name()
+        if not name:
+            raise ValueError(
+                "iron-token-broker reconcile requires "
+                "KUBERNETES_TOKEN_BROKER_NAME to be set"
+            )
+        rendered = render_broker_yaml(secrets)
+        config_hash = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+        changed = await self._apply_token_broker_configmap(rendered)
+        if changed:
+            await self._patch_token_broker_config_hash(config_hash)
+        log.info(
+            "token_broker_reconciled",
+            deployment=name,
+            config_hash=config_hash,
+            rollout_triggered=changed,
+        )
+
+    async def _apply_token_broker_configmap(self, rendered: str) -> bool:
+        """Create or replace the broker ConfigMap; return True if content changed."""
+        name = _token_broker_configmap_name()
+        labels = {
+            _TOKEN_BROKER_LABEL: "true",
+            "app.kubernetes.io/component": "token-broker",
+        }
+        body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": name, "labels": labels},
+            "data": {"iron-token-broker.yaml": rendered},
+        }
+        try:
+            existing = await self._core_api().read_namespaced_config_map(
+                name, _namespace()
+            )
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+            await self._core_api().create_namespaced_config_map(_namespace(), body)
+            return True
+        existing_data = (existing.data or {}).get("iron-token-broker.yaml")
+        if existing_data == rendered:
+            return False
+        await self._core_api().replace_namespaced_config_map(name, _namespace(), body)
+        return True
+
+    async def _patch_token_broker_config_hash(self, config_hash: str) -> None:
+        """Bump the pod-template config-hash annotation to trigger a rollout.
+
+        The chart-managed Deployment uses ``Recreate`` strategy, so this
+        terminates the running broker, k8s rolls a fresh pod that re-reads
+        the updated ConfigMap. Matches the kubectl ``rollout restart``
+        annotation contract (``kubectl.kubernetes.io/restartedAt``) plus
+        our own hash for traceability.
+        """
+        name = _token_broker_name()
+        patch = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "centaur.ai/config-hash": config_hash,
+                        }
+                    }
+                }
+            }
+        }
+        try:
+            await self._apps_api().patch_namespaced_deployment(
+                name, _namespace(), patch
+            )
+        except Exception as exc:
+            if self._is_not_found(exc):
+                # The chart hasn't rolled out the broker Deployment yet (or
+                # tokenBroker.enabled was just flipped on but helm upgrade
+                # hasn't run). Log and move on — the ConfigMap is in place,
+                # so when the Deployment appears it will pick up the latest
+                # rendered config on first start.
+                log.warning(
+                    "token_broker_deployment_not_found",
+                    deployment=name,
+                    hint="run `helm upgrade` to create the broker Deployment",
+                )
+                return
+            raise
 
     async def _apply_proxy_configmap_data(
         self, name: str, sandbox_id: str, rendered: str

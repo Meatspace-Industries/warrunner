@@ -116,3 +116,28 @@ def test_run_migrations_timeout_does_not_expose_database_url(
     assert "core" in message
     assert "super_secret" not in message
     assert "postgresql://" not in message
+
+
+@pytest.mark.asyncio
+async def test_create_pool_can_disable_asyncpg_reset(monkeypatch) -> None:
+    import api.db as db
+
+    captured: dict[str, object] = {}
+
+    async def fake_create_pool(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setenv("ASYNCPG_POOL_RESET_MODE", "noop")
+    monkeypatch.setattr(db, "run_migrations", lambda _database_url: None)
+    monkeypatch.setattr(db.asyncpg, "create_pool", fake_create_pool)
+
+    pool = await db.create_pool("postgresql://user:pass@proxy/centaur")
+
+    assert pool is not None
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    reset = kwargs["reset"]
+    assert reset is not None
+    assert await reset(object()) is None

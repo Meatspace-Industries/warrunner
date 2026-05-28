@@ -12,7 +12,7 @@ is present.
 - Namespace: `centaur-system`
 - Deploy env: `~/.config/warrunner/deploy.env`
 - Codex auth: `~/.codex/auth.json` from a local `codex login`
-- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:263a6e84`
+- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:<current-git-short-sha>`
 
 Create the deploy env from the template:
 
@@ -34,7 +34,8 @@ Get the bot token from Discord Developer Portal:
    messages, create public threads, and send messages in threads.
 5. Confirm it can access the Warrunner home channel `1508220472569888950`.
    The integration supports forum threads, but this Meatspace deploy currently
-   uses that home text channel with bot mentions required for top-level turns.
+   uses that home text channel with bot mentions required for top-level turns;
+   explicit bot mentions in other visible Discord threads are also accepted.
 
 ## Bootstrap
 
@@ -45,8 +46,9 @@ meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh --check-only
 ```
 
 The real bootstrap writes Kubernetes Secrets. It uploads local ChatGPT Codex auth
-from `~/.codex/auth.json` into `warrunner-codex-auth`, so get explicit operator
-approval before running it:
+from `~/.codex/auth.json` into `warrunner-codex-auth` and derives the token-broker
+client/account fields plus the initial broker JSON blob in `centaur-infra-env`,
+so get explicit operator approval before running it:
 
 ```bash
 meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh
@@ -68,8 +70,14 @@ meatspace/scripts/warrunner-deploy-gke.sh --render-only >/tmp/warrunner-render.y
 rg -n "KUBERNETES_CODEX_AUTH_SECRET_NAME|CENTAUR_DISABLED_INFRA_SECRETS|name: OPENAI_API_KEY|OPENAI_API_KEY" /tmp/warrunner-render.yaml
 ```
 
-The only `OPENAI_API_KEY` occurrence should be the disabled-secret marker:
-`CENTAUR_DISABLED_INFRA_SECRETS=OPENAI_API_KEY`.
+`OPENAI_API_KEY` should appear only inside the disabled-secret marker
+(`CENTAUR_DISABLED_INFRA_SECRETS`) and never as an injected env var.
+
+Warrunner uses `iron-token-broker` with a persistent file store for Codex
+refresh-token rotation. Helm creates a ReadWriteOnce PVC for
+`/var/lib/iron-token-broker`; the broker bootstrap init container copies
+`OPENAI_CODEX_BLOB` into that PVC only when the file is absent, then the broker
+owns subsequent refresh-token writes.
 
 Deploy:
 

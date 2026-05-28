@@ -14,6 +14,9 @@ TMPDIRS_TO_CLEAN=()
 
 cleanup_tmpdirs() {
   local dir
+  if [[ ${#TMPDIRS_TO_CLEAN[@]} -eq 0 ]]; then
+    return
+  fi
   for dir in "${TMPDIRS_TO_CLEAN[@]}"; do
     if [[ -n "$dir" ]]; then
       rm -rf "$dir"
@@ -99,7 +102,25 @@ require_env_value() {
   fi
 }
 
+require_env_or_existing_value() {
+  local name="$1"
+  if [[ -n "${!name:-}" ]]; then
+    return
+  fi
+  if [[ -n "$(existing_secret_value "$name")" ]]; then
+    return
+  fi
+  echo "FATAL: $name is required in $ENV_FILE or existing Secret $INFRA_SECRET_NAME" >&2
+  exit 1
+}
+
+has_existing_secret_key() {
+  local key="$1"
+  secret_has_key "$INFRA_SECRET_NAME" "$key"
+}
+
 secret_exists() {
+  command -v kubectl >/dev/null 2>&1 || return 1
   kubectl -n "$NAMESPACE" get secret "$1" >/dev/null 2>&1
 }
 
@@ -138,6 +159,7 @@ secret_data_value() {
 secret_has_key() {
   local secret_name="$1"
   local key="$2"
+  command -v kubectl >/dev/null 2>&1 || return 1
   kubectl -n "$NAMESPACE" get secret "$secret_name" -o json 2>/dev/null \
     | python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(sys.stdin).get("data", {}) else 1)' "$key"
 }
@@ -205,8 +227,37 @@ env_or_existing_or_generated() {
 
 validate_codex_auth() {
   python3 - "$CODEX_AUTH_FILE" <<'PY'
+import base64
+import datetime as dt
 import json
 import sys
+
+def decode_payload(token):
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    payload += "=" * ((4 - len(payload) % 4) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+def codex_client_id(data, tokens):
+    access_payload = decode_payload(tokens.get("access_token"))
+    if access_payload.get("client_id"):
+        return str(access_payload["client_id"]).strip()
+    if access_payload.get("azp"):
+        return str(access_payload["azp"]).strip()
+    id_payload = decode_payload(tokens.get("id_token"))
+    aud = id_payload.get("aud")
+    if isinstance(aud, str):
+        return aud.strip()
+    if isinstance(aud, list):
+        for item in aud:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ""
 
 path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
@@ -219,8 +270,91 @@ tokens = data.get("tokens")
 if not isinstance(tokens, dict) or not tokens.get("refresh_token"):
     raise SystemExit("FATAL: Codex auth JSON is missing tokens.refresh_token")
 
+if not tokens.get("account_id"):
+    raise SystemExit("FATAL: Codex auth JSON is missing tokens.account_id")
+
+if not codex_client_id(data, tokens):
+    raise SystemExit("FATAL: Codex auth JSON is missing a recoverable client id")
+
 if data.get("OPENAI_API_KEY"):
     raise SystemExit("FATAL: Codex auth JSON must not contain OPENAI_API_KEY")
+PY
+}
+
+codex_auth_value() {
+  local field="$1"
+  python3 - "$CODEX_AUTH_FILE" "$field" <<'PY'
+import base64
+import datetime as dt
+import json
+import sys
+
+def decode_payload(token):
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    payload += "=" * ((4 - len(payload) % 4) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+def client_id(tokens):
+    access_payload = decode_payload(tokens.get("access_token"))
+    for key in ("client_id", "azp"):
+        value = access_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    id_payload = decode_payload(tokens.get("id_token"))
+    aud = id_payload.get("aud")
+    if isinstance(aud, str) and aud.strip():
+        return aud.strip()
+    if isinstance(aud, list):
+        for item in aud:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ""
+
+def token_expiry_iso(token):
+    payload = decode_payload(token)
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return ""
+    return dt.datetime.fromtimestamp(exp, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+path, field = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+tokens = data.get("tokens")
+if not isinstance(tokens, dict):
+    raise SystemExit(f"FATAL: Codex auth JSON has no tokens object")
+
+if field == "refresh_token":
+    value = tokens.get("refresh_token")
+elif field == "account_id":
+    value = tokens.get("account_id")
+elif field == "client_id":
+    value = client_id(tokens)
+elif field == "broker_blob":
+    refresh_token = tokens.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token.strip():
+        raise SystemExit("FATAL: Codex auth JSON is missing refresh_token")
+    value = json.dumps(
+        {
+            "access_token": tokens.get("access_token") or "",
+            "refresh_token": refresh_token,
+            "expires_at": token_expiry_iso(tokens.get("access_token")),
+            "last_refresh": data.get("last_refresh") or "",
+        },
+        separators=(",", ":"),
+    )
+else:
+    raise SystemExit(f"unknown Codex auth field: {field}")
+
+if not isinstance(value, str) or not value.strip():
+    raise SystemExit(f"FATAL: Codex auth JSON is missing {field}")
+sys.stdout.write(value.strip())
 PY
 }
 
@@ -251,8 +385,8 @@ if [[ "$CODEX_AUTH_ONLY" != "1" ]]; then
 
   require_env_value DISCORD_BOT_TOKEN
   require_env_value DISCORD_GUILD_ID
-  require_env_value GITHUB_APP_ID
-  require_env_value GITHUB_APP_INSTALLATION_ID
+  require_env_or_existing_value GITHUB_APP_ID
+  require_env_or_existing_value GITHUB_APP_INSTALLATION_ID
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     echo "FATAL: OPENAI_API_KEY must not be set for Warrunner; use Codex ChatGPT login auth instead" >&2
     exit 1
@@ -261,8 +395,10 @@ if [[ "$CODEX_AUTH_ONLY" != "1" ]]; then
     echo "FATAL: WARRUNNER_HOME_FORUM_CHANNEL_ID or WARRUNNER_HOME_CHANNEL_IDS is required in $ENV_FILE" >&2
     exit 1
   fi
-  if [[ -z "${GITHUB_APP_PRIVATE_KEY:-}" && -z "${GITHUB_APP_PRIVATE_KEY_BASE64:-}" && -z "${GITHUB_APP_PRIVATE_KEY_FILE:-}" ]]; then
-    echo "FATAL: GITHUB_APP_PRIVATE_KEY, GITHUB_APP_PRIVATE_KEY_BASE64, or GITHUB_APP_PRIVATE_KEY_FILE is required in $ENV_FILE" >&2
+  if [[ -z "${GITHUB_APP_PRIVATE_KEY:-}" && -z "${GITHUB_APP_PRIVATE_KEY_BASE64:-}" && -z "${GITHUB_APP_PRIVATE_KEY_FILE:-}" ]] \
+    && ! has_existing_secret_key GITHUB_APP_PRIVATE_KEY \
+    && ! has_existing_secret_key GITHUB_APP_PRIVATE_KEY_BASE64; then
+    echo "FATAL: GITHUB_APP_PRIVATE_KEY, GITHUB_APP_PRIVATE_KEY_BASE64, or GITHUB_APP_PRIVATE_KEY_FILE is required in $ENV_FILE or existing Secret $INFRA_SECRET_NAME" >&2
     exit 1
   fi
   if [[ -n "${GITHUB_APP_PRIVATE_KEY_FILE:-}" && ! -r "${GITHUB_APP_PRIVATE_KEY_FILE:-}" ]]; then
@@ -313,6 +449,7 @@ secret_file_args=(
 add_secret_file_arg "$SECRET_TMPDIR" POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 add_secret_file_arg "$SECRET_TMPDIR" DATABASE_URL "$DATABASE_URL"
 add_secret_file_arg "$SECRET_TMPDIR" IRON_MANAGEMENT_API_KEY "$(existing_or_generated IRON_MANAGEMENT_API_KEY)"
+add_secret_file_arg "$SECRET_TMPDIR" IRON_BROKER_TOKEN "$(env_or_existing_or_generated IRON_BROKER_TOKEN)"
 add_secret_file_arg "$SECRET_TMPDIR" SANDBOX_SIGNING_KEY "$(existing_or_generated SANDBOX_SIGNING_KEY)"
 add_secret_file_arg "$SECRET_TMPDIR" DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
 add_secret_file_arg "$SECRET_TMPDIR" DISCORDBOT_API_KEY "$DISCORDBOT_API_KEY"
@@ -321,6 +458,12 @@ add_secret_file_arg "$SECRET_TMPDIR" SLACK_SIGNING_SECRET "$SLACK_SIGNING_SECRET
 add_secret_file_arg "$SECRET_TMPDIR" SLACKBOT_API_KEY "$SLACKBOT_API_KEY"
 add_secret_file_arg "$SECRET_TMPDIR" LMNR_PROJECT_API_KEY "$LMNR_PROJECT_API_KEY"
 add_secret_file_arg "$SECRET_TMPDIR" LMNR_BASE_URL "$LMNR_BASE_URL"
+OPENAI_CODEX_CLIENT_ID="${OPENAI_CODEX_CLIENT_ID:-$(codex_auth_value client_id)}"
+OPENAI_CODEX_BLOB="${OPENAI_CODEX_BLOB:-$(codex_auth_value broker_blob)}"
+OPENAI_CODEX_ACCOUNT_ID="${OPENAI_CODEX_ACCOUNT_ID:-$(codex_auth_value account_id)}"
+add_secret_file_arg "$SECRET_TMPDIR" OPENAI_CODEX_CLIENT_ID "$OPENAI_CODEX_CLIENT_ID"
+add_secret_file_arg "$SECRET_TMPDIR" OPENAI_CODEX_BLOB "$OPENAI_CODEX_BLOB"
+add_secret_file_arg "$SECRET_TMPDIR" OPENAI_CODEX_ACCOUNT_ID "$OPENAI_CODEX_ACCOUNT_ID"
 ANTHROPIC_API_KEY="$(env_or_existing ANTHROPIC_API_KEY)"
 AMP_API_KEY="$(env_or_existing AMP_API_KEY)"
 GITHUB_APP_ID="$(env_or_existing GITHUB_APP_ID)"

@@ -1,6 +1,6 @@
-# Warrunner's default Meatspace deployment shape uses a mention-gated Discord
-# home channel. Forum-thread routing remains available when a real forum/media
-# channel is configured.
+# Warrunner's default Meatspace deployment shape is Discord-first: home-channel
+# turns are mention-gated, and explicit bot mentions in visible Discord threads
+# are allowed so work can happen where the team is already talking.
 
 api:
   executionWorkerEnabled: true
@@ -18,7 +18,7 @@ api:
   discordBackfillPagesPerJob: 5
   extraEnv:
     CENTAUR_DEPLOYMENT_NAME: warrunner
-    CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY
+    CENTAUR_DISABLED_INFRA_SECRETS: OPENAI_API_KEY,anthropic-claude
     CENTAUR_REQUIRE_GITHUB_APP_AUTH: "true"
     # Keep repo-scoped turns below the GitHub App token lifetime, leaving room
     # for proxy/pod readiness waits and a safety buffer.
@@ -31,6 +31,19 @@ api:
 
 ironProxy:
   secretSource: env
+
+tokenBroker:
+  enabled: true
+  storeSource: file
+  envSecretKeys:
+    - OPENAI_CODEX_CLIENT_ID
+  fileStore:
+    enabled: true
+    bootstrapSecretKeys:
+      - OPENAI_CODEX_BLOB
+
+toolServer:
+  enabled: true
 
 slackbot:
   enabled: false
@@ -65,6 +78,7 @@ sandbox:
     existingSecretName: warrunner-codex-auth
     secretKey: auth.json
   extraEnv:
+    CODEX_AUTH_MODE: access_token
     WARRUNNER_RUNTIME_STATE_DIR: /var/lib/meepo
 
 repoCache:

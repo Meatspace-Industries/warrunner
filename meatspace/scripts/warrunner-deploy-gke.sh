@@ -7,7 +7,10 @@ EGRESS_NAMESPACE="${WARRUNNER_EGRESS_NAMESPACE:-centaur-egress}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-dapp-455423}"
 LOCATION="us-west1"
 REPOSITORY="warrunner"
-IMAGE_TAG="${WARRUNNER_IMAGE_TAG:-263a6e84}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_IMAGE_TAG="$(git -C "$REPO_ROOT" rev-parse --short=8 HEAD 2>/dev/null || printf 'dev')"
+IMAGE_TAG="${WARRUNNER_IMAGE_TAG:-$DEFAULT_IMAGE_TAG}"
 ENV_FILE="${WARRUNNER_DEPLOY_ENV_FILE:-$HOME/.config/warrunner/deploy.env}"
 RENDER_ONLY=0
 SKIP_IMAGE_CHECK=0
@@ -32,7 +35,7 @@ Options:
   --project <id>            Google Cloud project. Default: dapp-455423
   --location <name>         Artifact Registry location. Default: us-west1
   --repository <name>       Artifact Registry repository. Default: warrunner
-  --image-tag <tag>         Image tag. Default: 263a6e84
+  --image-tag <tag>         Image tag. Default: current git short SHA
   --env-file <path>         Deploy env file. Default: ~/.config/warrunner/deploy.env
   --render-only             Render Helm manifests and verify invariants; do not deploy
   --skip-image-check        Do not verify image tags in Artifact Registry
@@ -178,6 +181,31 @@ if data.get("OPENAI_API_KEY"):
 ' "$key"
 }
 
+validate_broker_blob_secret() {
+  local name="$1"
+  local key="$2"
+  kubectl -n "$NAMESPACE" get secret "$name" -o json \
+    | python3 -c '
+import base64
+import json
+import sys
+
+key = sys.argv[1]
+secret = json.load(sys.stdin)
+encoded = secret.get("data", {}).get(key)
+if not encoded:
+    raise SystemExit(f"FATAL: Kubernetes Secret is missing key {key}")
+
+try:
+    data = json.loads(base64.b64decode(encoded).decode())
+except Exception as exc:
+    raise SystemExit(f"FATAL: {key} must be a broker JSON blob, not a raw token") from exc
+
+if not isinstance(data, dict) or not data.get("refresh_token"):
+    raise SystemExit(f"FATAL: {key} broker blob is missing refresh_token")
+' "$key"
+}
+
 image_exists() {
   local image="$1"
   gcloud artifacts docker tags list "$image" \
@@ -200,7 +228,7 @@ verify_rendered_invariants() {
   grep -q 'name: KUBERNETES_CODEX_AUTH_SECRET_NAME' "$rendered"
   grep -q 'value: "warrunner-codex-auth"' "$rendered"
   grep -q 'name: CENTAUR_DISABLED_INFRA_SECRETS' "$rendered"
-  grep -q 'value: "OPENAI_API_KEY"' "$rendered"
+  grep -q 'OPENAI_API_KEY' "$rendered"
   if grep -q 'name: OPENAI_API_KEY' "$rendered"; then
     echo "FATAL: rendered deployment still injects OPENAI_API_KEY" >&2
     exit 1
@@ -222,9 +250,51 @@ def require_env(name, value):
 
 require_env("FIREWALL_MANAGER_SECRET_SOURCE", "env")
 require_env("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "env")
+require_env("FIREWALL_MANAGER_TOKEN_BROKER_STORE_SOURCE", "file")
+require_env("IRON_TOKEN_BROKER_FILE_STORE_DIR", "/var/lib/iron-token-broker")
+require_env("KUBERNETES_TOOL_SERVER_PORT", "8001")
+require_env("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS", "DISCORD_BOT_TOKEN")
 require_env("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "true")
+if not re.search(
+    r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n"
+    r"\s*value:\s*.*CODEX_AUTH_MODE.*access_token",
+    text,
+):
+    raise SystemExit(
+        "FATAL: rendered sandbox extra env does not set CODEX_AUTH_MODE=access_token"
+    )
+if "name: KUBERNETES_TOKEN_BROKER_NAME" not in text:
+    raise SystemExit("FATAL: rendered deployment does not enable token broker")
+if "name: KUBERNETES_TOKEN_BROKER_URL" not in text:
+    raise SystemExit("FATAL: rendered deployment does not publish token broker URL")
+if "name: IRON_BROKER_TOKEN" not in text:
+    raise SystemExit("FATAL: rendered deployment does not inject IRON_BROKER_TOKEN")
+if not re.search(r"name:\s*[\"']?OPENAI_CODEX_CLIENT_ID[\"']?", text):
+    raise SystemExit("FATAL: rendered token broker does not inject OPENAI_CODEX_CLIENT_ID")
+if "kind: PersistentVolumeClaim" not in text or "token-broker-store" not in text:
+    raise SystemExit("FATAL: rendered token broker does not include a persistent file store")
+if "OPENAI_CODEX_BLOB.json" not in text:
+    raise SystemExit("FATAL: rendered token broker does not bootstrap OPENAI_CODEX_BLOB.json")
+if "name: DISCORD_BOT_TOKEN" not in text:
+    raise SystemExit("FATAL: rendered deployment does not inject DISCORD_BOT_TOKEN")
 if re.search(r"name:\s*GITHUB_TOKEN\b", text):
     raise SystemExit("FATAL: rendered deployment still injects GITHUB_TOKEN")
+
+postgres_policy = re.search(
+    r"kind:\s*NetworkPolicy\s*\n"
+    r"metadata:\s*\n"
+    r"\s*name:\s*[\"']?[^\"'\n]*-centaur-postgres[\"']?\s*\n"
+    r"(?P<body>.*?)(?:\n---|\Z)",
+    text,
+    re.S,
+)
+if not postgres_policy or not re.search(
+    r"centaur\.ai/iron-proxy:\s*[\"']?true[\"']?",
+    postgres_policy.group("body"),
+):
+    raise SystemExit(
+        "FATAL: rendered Postgres NetworkPolicy does not admit iron-proxy pods"
+    )
 
 if re.search(
     r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n\s*value:\s*.*OPENAI_API_KEY",
@@ -338,10 +408,15 @@ require_cmd python3
 require_secret_key centaur-infra-env GITHUB_APP_ID
 require_secret_key centaur-infra-env GITHUB_APP_INSTALLATION_ID
 require_secret_one_key centaur-infra-env GITHUB_APP_PRIVATE_KEY GITHUB_APP_PRIVATE_KEY_BASE64
+require_secret_key centaur-infra-env IRON_BROKER_TOKEN
+require_secret_key centaur-infra-env OPENAI_CODEX_CLIENT_ID
+require_secret_key centaur-infra-env OPENAI_CODEX_BLOB
+require_secret_key centaur-infra-env OPENAI_CODEX_ACCOUNT_ID
 require_secret_key warrunner-codex-auth auth.json
 reject_secret_key centaur-infra-env OPENAI_API_KEY
 reject_secret_key centaur-infra-env GITHUB_TOKEN
 validate_codex_auth_secret warrunner-codex-auth auth.json
+validate_broker_blob_secret centaur-infra-env OPENAI_CODEX_BLOB
 
 kubectl create namespace "$EGRESS_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 

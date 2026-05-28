@@ -8,7 +8,7 @@ from typing import Optional, Union
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -524,6 +524,23 @@ def test_collect_secrets_can_disable_openai_infra_secret(
     assert "AMP_API_KEY" in secret_names
 
 
+def test_collect_secrets_can_disable_unused_brokered_harness_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "CENTAUR_DISABLED_INFRA_SECRETS", "OPENAI_API_KEY,anthropic-claude"
+    )
+
+    manager = ToolManager(tmp_path / "tools")
+    secrets = manager.collect_secrets()
+    secret_names = {secret.name for secret in secrets}
+
+    assert "OPENAI_API_KEY" not in secret_names
+    assert "anthropic-claude" not in secret_names
+    assert "openai-codex" in secret_names
+
+
 @pytest.mark.asyncio
 async def test_call_tool_invokes_sync_and_async_methods_with_secret_placeholders(
     tmp_path: Path,
@@ -626,6 +643,21 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
     manager = ToolManager(tools_dir)
     manager.discover()
     app = FastAPI()
+
+    from api.api_keys import APIKeyInfo
+    from api.deps import verify_api_key
+
+    async def fake_verify_api_key(request: Request) -> str:
+        request.state.api_key_info = APIKeyInfo(
+            id="test-key",
+            name="test",
+            key_prefix="test",
+            scopes=["tools:*"],
+            created_by="test",
+        )
+        return "test"
+
+    app.dependency_overrides[verify_api_key] = fake_verify_api_key
     app.include_router(manager.create_rest_router())
 
     transport = httpx.ASGITransport(app=app)
@@ -675,3 +707,84 @@ async def test_tool_rest_router_lists_describes_and_invokes_tools(
             '{"error": "Method \'missing\' not found in tool \'alpha\'", '
             '"available_methods": ["async_echo", "secret_values", "sync_echo"]}'
         )
+
+
+class TestHarnessSecretSelection:
+    """ToolManager picks the right harness credentials for a sandbox based on
+    its engine and auth-mode env vars."""
+
+    def _names(self, secrets: list) -> set[str]:
+        return {getattr(s, "name", None) for s in secrets}
+
+    def test_claude_code_api_key_includes_anthropic_excludes_openai(self) -> None:
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(
+            tm.secrets_for_sandbox("claude-code", {"CLAUDE_CODE_AUTH_MODE": "api_key"})
+        )
+        assert "ANTHROPIC_API_KEY" in names
+        assert "OPENAI_API_KEY" not in names
+        assert "anthropic-claude" not in names
+
+    def test_claude_code_access_token_swaps_to_brokered(self) -> None:
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(
+            tm.secrets_for_sandbox(
+                "claude-code", {"CLAUDE_CODE_AUTH_MODE": "access_token"}
+            )
+        )
+        assert "anthropic-claude" in names
+        assert "ANTHROPIC_API_KEY" not in names
+        assert "OPENAI_API_KEY" not in names
+
+    def test_codex_api_key_includes_openai_excludes_anthropic(self) -> None:
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(
+            tm.secrets_for_sandbox("codex", {"CODEX_AUTH_MODE": "api_key"})
+        )
+        assert "OPENAI_API_KEY" in names
+        assert "ANTHROPIC_API_KEY" not in names
+        assert "openai-codex" not in names
+
+    def test_codex_access_token_swaps_to_brokered_with_account_id(self) -> None:
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(
+            tm.secrets_for_sandbox("codex", {"CODEX_AUTH_MODE": "access_token"})
+        )
+        assert "openai-codex" in names
+        assert "OPENAI_CODEX_ACCOUNT_ID" in names
+        assert "OPENAI_API_KEY" not in names
+
+    def test_unset_auth_mode_defaults_to_api_key(self) -> None:
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(tm.secrets_for_sandbox("claude-code", {}))
+        assert "ANTHROPIC_API_KEY" in names
+        assert "anthropic-claude" not in names
+
+    def test_unknown_engine_gets_no_harness_extras(self) -> None:
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(
+            tm.secrets_for_sandbox("amp", {"CLAUDE_CODE_AUTH_MODE": "access_token"})
+        )
+        assert "ANTHROPIC_API_KEY" not in names
+        assert "OPENAI_API_KEY" not in names
+        # Base infra secrets (AMP_API_KEY, GITHUB_TOKEN, etc.) still present.
+        assert "AMP_API_KEY" in names
+
+    def test_collect_secrets_returns_union_of_all_harness_variants(self) -> None:
+        """The shared API-side proxy and token broker need every harness
+        credential so they can manage the full set regardless of which mode
+        any individual sandbox is using right now."""
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(tm.collect_secrets())
+        assert "ANTHROPIC_API_KEY" in names
+        assert "OPENAI_API_KEY" in names
+        assert "anthropic-claude" in names
+        assert "openai-codex" in names
+        assert "OPENAI_CODEX_ACCOUNT_ID" in names

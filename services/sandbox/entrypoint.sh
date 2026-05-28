@@ -3,6 +3,17 @@ set -e
 
 HOME_DIR="$(eval echo ~)"
 FIREWALL_HOSTNAME="${FIREWALL_HOST:-firewall}"
+STATE_DIR="${CENTAUR_STATE_DIR:-$HOME_DIR/state}"
+
+if [ -d "$STATE_DIR" ] && [ -w "$STATE_DIR" ]; then
+    mkdir -p "$STATE_DIR/workspace" "$STATE_DIR/uploads" "$STATE_DIR/branches" "$STATE_DIR/codex" "$STATE_DIR/claude"
+    rm -rf "$HOME_DIR/.codex" "$HOME_DIR/.claude" "$HOME_DIR/uploads" "$HOME_DIR/branches"
+    ln -s "$STATE_DIR/codex" "$HOME_DIR/.codex"
+    ln -s "$STATE_DIR/claude" "$HOME_DIR/.claude"
+    ln -s "$STATE_DIR/uploads" "$HOME_DIR/uploads"
+    ln -s "$STATE_DIR/branches" "$HOME_DIR/branches"
+    export CENTAUR_PERSISTENT_STATE=1
+fi
 
 mkdir -p "$HOME_DIR/.config/amp"
 
@@ -60,14 +71,26 @@ PYEOF
 fi
 
 # ── Codex settings ──────────────────────────────────────────────────────────
+# CODEX_AUTH_MODE selects how codex authenticates with the upstream:
+#   - api_key (default): codex uses an OPENAI_API_KEY against api.openai.com.
+#     The entrypoint runs `codex login --with-api-key` below, which overwrites
+#     auth.json.
+#   - access_token: codex uses a ChatGPT-style access token against
+#     chatgpt.com. The default auth.json (auth_mode: chatgpt) is always
+#     installed and the api-key login step is skipped so iron-proxy can
+#     inject the brokered Bearer + chatgpt-account-id headers.
+CODEX_AUTH_MODE="${CODEX_AUTH_MODE:-api_key}"
 mkdir -p "$HOME_DIR/.codex"
+if [ "$CODEX_AUTH_MODE" = "access_token" ] && [ -f /etc/centaur/codex-auth.default.json ]; then
+    cp /etc/centaur/codex-auth.default.json "$HOME_DIR/.codex/auth.json"
+    chmod 600 "$HOME_DIR/.codex/auth.json"
+elif [ ! -f "$HOME_DIR/.codex/auth.json" ] && [ -f /etc/centaur/codex-auth.default.json ]; then
+    cp /etc/centaur/codex-auth.default.json "$HOME_DIR/.codex/auth.json"
+    chmod 600 "$HOME_DIR/.codex/auth.json"
+fi
 if [ -n "${CENTAUR_TRACE_ID:-}" ]; then
     printf '%s' "$CENTAUR_TRACE_ID" > "$HOME_DIR/.trace_id"
 fi
-
-toml_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
 
 HARNESS_CONFIG_DIR="${CENTAUR_HARNESS_CONFIG_DIR:-$HOME_DIR/harness}"
 if [ -f "$HARNESS_CONFIG_DIR/codex/config.toml" ]; then
@@ -112,13 +135,9 @@ PYEOF
     chmod 600 "$HOME_DIR/.codex/auth.json" 2>/dev/null || true
 fi
 
-if [ "$CODEX_HARNESS_SELECTED" = "1" ]; then
+if [ "$CODEX_HARNESS_SELECTED" = "1" ] && [ "$CODEX_AUTH_MODE" = "access_token" ]; then
     if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ]; then
-        echo "fatal: codex_api_key_login_disabled; use mounted ChatGPT auth JSON via CENTAUR_CODEX_AUTH_JSON" >&2
-        exit 1
-    fi
-    if [ -z "$CODEX_AUTH_JSON" ]; then
-        echo "fatal: codex_chatgpt_auth_required; CENTAUR_CODEX_AUTH_JSON must point at mounted ChatGPT auth JSON" >&2
+        echo "fatal: codex_api_key_login_disabled; access_token mode uses mounted ChatGPT auth JSON" >&2
         exit 1
     fi
     if [ ! -f "$HOME_DIR/.codex/auth.json" ]; then
@@ -126,39 +145,39 @@ if [ "$CODEX_HARNESS_SELECTED" = "1" ]; then
         exit 1
     fi
 fi
-
-codex_laminar_trace_endpoint="${CODEX_OTEL_LAMINAR_ENDPOINT:-}"
-if [ -z "$codex_laminar_trace_endpoint" ]; then
-    codex_laminar_base="${CODEX_OTEL_LAMINAR_BASE_URL:-${LMNR_BASE_URL:-}}"
-    if [ -n "$codex_laminar_base" ]; then
-        codex_laminar_base="${codex_laminar_base%/}"
-        case "$codex_laminar_base" in
-            */v1/traces) codex_laminar_trace_endpoint="$codex_laminar_base" ;;
-            *) codex_laminar_trace_endpoint="$codex_laminar_base/v1/traces" ;;
-        esac
-    fi
-fi
-
-if [ -n "$codex_laminar_trace_endpoint" ] && [ -n "${CENTAUR_TRACE_ID:-}" ]; then
-    codex_otel_environment="${CODEX_OTEL_ENVIRONMENT:-${DEPLOY_ENV:-${ENVIRONMENT:-dev}}}"
-    codex_otel_headers="\"x-trace-id\" = \"$(toml_escape "${CENTAUR_TRACE_ID:-}")\", \"x-centaur-thread-key\" = \"$(toml_escape "${CENTAUR_THREAD_KEY:-}")\""
-    if [ -n "${LMNR_PROJECT_API_KEY:-}" ]; then
-        codex_otel_headers="$codex_otel_headers, \"authorization\" = \"Bearer $(toml_escape "$LMNR_PROJECT_API_KEY")\""
-    fi
-    cat >> "$HOME_DIR/.codex/config.toml" <<EOF
-
-[otel]
-environment = "$(toml_escape "$codex_otel_environment")"
-log_user_prompt = false
-trace_exporter = { otlp-http = { endpoint = "$(toml_escape "$codex_laminar_trace_endpoint")", protocol = "binary", headers = { $codex_otel_headers } } }
-EOF
-fi
-
 # ── Claude Code settings ────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.claude"
 if [ -f "$HARNESS_CONFIG_DIR/claude/settings.json" ]; then
     cp "$HARNESS_CONFIG_DIR/claude/settings.json" "$HOME_DIR/.claude/settings.json"
 fi
+
+# CLAUDE_CODE_AUTH_MODE selects how Claude Code authenticates with the upstream
+# (mirrors CODEX_AUTH_MODE):
+#   - api_key (default): Claude Code uses ANTHROPIC_API_KEY against
+#     api.anthropic.com. The harness stub key is left in the env; iron-proxy's
+#     ANTHROPIC_API_KEY HttpSecret rewrites the X-Api-Key header on the wire.
+#   - access_token: Claude Code runs as a Claude.ai Pro or Max subscription
+#     user. We install a dummy ~/.claude/.credentials.json so the CLI emits
+#     OAuth-shaped requests, unset the API-key stub so it does not fall back
+#     to X-Api-Key, and let iron-token-broker mint a real Bearer at request
+#     time via the anthropic-claude brokered_token secret.
+CLAUDE_CODE_AUTH_MODE="${CLAUDE_CODE_AUTH_MODE:-api_key}"
+case "$CLAUDE_CODE_AUTH_MODE" in
+    api_key)
+        :
+        ;;
+    access_token)
+        unset ANTHROPIC_API_KEY
+        if [ -f /etc/centaur/claude-credentials.default.json ]; then
+            cp /etc/centaur/claude-credentials.default.json "$HOME_DIR/.claude/.credentials.json"
+            chmod 600 "$HOME_DIR/.claude/.credentials.json"
+        fi
+        ;;
+    *)
+        echo "unknown CLAUDE_CODE_AUTH_MODE: $CLAUDE_CODE_AUTH_MODE (expected api_key or access_token)" >&2
+        exit 1
+        ;;
+esac
 
 # ── Pi-mono settings ─────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
@@ -183,26 +202,32 @@ configure_github_git_credentials() {
 configure_github_git_credentials
 
 # ── Per-session workspace clone (no shared worktree metadata) ────────────────
-WORKSPACE_DIR="$HOME_DIR/workspace"
+if [ "${CENTAUR_PERSISTENT_STATE:-0}" = "1" ]; then
+    WORKSPACE_DIR="$STATE_DIR/workspace"
+else
+    WORKSPACE_DIR="$HOME_DIR/workspace"
+fi
 if [ -n "${AGENT_REPO:-}" ]; then
     REPO_PATH="$HOME_DIR/github/$AGENT_REPO"
-    rm -rf "$WORKSPACE_DIR"
-    if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
-        if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
-            echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
-            rm -rf "$WORKSPACE_DIR"
-            git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+    if ! git -C "$WORKSPACE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        rm -rf "$WORKSPACE_DIR"
+        if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+            if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
+                echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
+                rm -rf "$WORKSPACE_DIR"
+                git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+            fi
+        else
+            REPO_URL="https://github.com/$AGENT_REPO.git"
+            if ! git clone --quiet "$REPO_URL" "$WORKSPACE_DIR"; then
+                echo "failed to clone AGENT_REPO from GitHub: $AGENT_REPO" >&2
+                exit 1
+            fi
         fi
-    else
-        REPO_URL="https://github.com/$AGENT_REPO.git"
-        if ! git clone --quiet "$REPO_URL" "$WORKSPACE_DIR"; then
-            echo "failed to clone AGENT_REPO from GitHub: $AGENT_REPO" >&2
-            exit 1
-        fi
-    fi
 
-    BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
-    git -C "$WORKSPACE_DIR" checkout -q -b "$BRANCH" || true
+        BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
+        git -C "$WORKSPACE_DIR" checkout -q -b "$BRANCH" || true
+    fi
 else
     mkdir -p "$WORKSPACE_DIR"
 fi
@@ -239,7 +264,7 @@ fi
 # ── Assemble system prompt from bind mounts ──────────────────────────────────
 # Base prompt: mounted as AGENTS_BASE.md when present, fallback to baked-in AGENTS.md.
 # Org/persona overlays are mounted alongside the base prompt when present.
-TARGET_PROMPT="$HOME_DIR/workspace/AGENTS.md"
+TARGET_PROMPT="$WORKSPACE_DIR/AGENTS.md"
 if [ -f "$HOME_DIR/AGENTS_BASE.md" ]; then
     cp "$HOME_DIR/AGENTS_BASE.md" "$TARGET_PROMPT"
 elif [ -f "$HOME_DIR/AGENTS.md" ]; then
@@ -259,6 +284,17 @@ cd "$WORKSPACE_DIR"
 HARNESS_ADAPTER="${CENTAUR_HARNESS_ADAPTER:-/usr/local/bin/harness-adapter}"
 if [ -x "$HARNESS_ADAPTER" ]; then
     "$HARNESS_ADAPTER" "${1:-}" "$TARGET_PROMPT"
+fi
+
+# Codex reads its auth file when the app server starts. Complete this before
+# signaling readiness, otherwise warm pods can be claimed with no auth loaded.
+# Skipped under access_token mode — that path relies on the chatgpt auth.json
+# installed above plus iron-proxy injecting the real Bearer at request time.
+if [ "$CODEX_AUTH_MODE" != "access_token" ]; then
+    CODEX_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
+    if [ -n "$CODEX_KEY" ]; then
+        echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
+    fi
 fi
 
 # Signal readiness
