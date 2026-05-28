@@ -12,7 +12,7 @@ is present.
 - Namespace: `centaur-system`
 - Deploy env: `~/.config/warrunner/deploy.env`
 - Codex auth: `~/.codex/auth.json` from a local `codex login`
-- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:263a6e84`
+- Images: `us-west1-docker.pkg.dev/dapp-455423/warrunner/*:<current-git-short-sha>`
 
 Create the deploy env from the template:
 
@@ -34,7 +34,8 @@ Get the bot token from Discord Developer Portal:
    messages, create public threads, and send messages in threads.
 5. Confirm it can access the Warrunner home channel `1508220472569888950`.
    The integration supports forum threads, but this Meatspace deploy currently
-   uses that home text channel with bot mentions required for top-level turns.
+   uses that home text channel with bot mentions required for top-level turns;
+   explicit bot mentions in other visible Discord threads are also accepted.
 
 ## Bootstrap
 
@@ -45,8 +46,9 @@ meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh --check-only
 ```
 
 The real bootstrap writes Kubernetes Secrets. It uploads local ChatGPT Codex auth
-from `~/.codex/auth.json` into `warrunner-codex-auth`, so get explicit operator
-approval before running it:
+from `~/.codex/auth.json` into `warrunner-codex-auth` and derives the token-broker
+refresh-token fields in `centaur-infra-env`, so get explicit operator approval
+before running it:
 
 ```bash
 meatspace/scripts/warrunner-bootstrap-k8s-secrets.sh

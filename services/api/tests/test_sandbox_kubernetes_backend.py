@@ -739,32 +739,21 @@ async def test_create_codex_pod_mounts_chatgpt_auth_without_openai_api_key(
     backend._core = fake_core
     backend._networking = fake_networking
 
-    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
-    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db/centaur")
-    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
-    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    _stub_create_dependencies(
+        monkeypatch,
+        backend,
+        extra_env=[
+            {"name": "CODEX_AUTH_MODE", "value": "access_token"},
+            {"name": "WARRUNNER_RUNTIME_STATE_DIR", "value": "/var/lib/meepo"},
+        ],
+        harness_cmd="codex-wrapper",
+    )
     monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_NAME", "warrunner-codex-auth")
     monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_KEY", "auth-state.json")
-    monkeypatch.setattr(
-        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    monkeypatch.setenv("KUBERNETES_TOKEN_BROKER_NAME", "centaur-token-broker")
+    monkeypatch.setenv(
+        "KUBERNETES_TOKEN_BROKER_URL", "http://centaur-token-broker:8181"
     )
-    monkeypatch.setattr(
-        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["codex-wrapper"]
-    )
-    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
-    monkeypatch.setattr(
-        backend, "_secrets_for_sandbox", lambda _engine, _auth_modes: []
-    )
-
-    async def fake_ensure_clients() -> None:
-        return None
-
-    async def fake_wait_ready(_pod_name: str) -> float:
-        return 0.01
-
-    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
-    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
-    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
 
     await backend.create(
         "discord:1435290709363130390:1508220472569888950:thread",
@@ -778,12 +767,26 @@ async def test_create_codex_pod_mounts_chatgpt_auth_without_openai_api_key(
     env = {item["name"]: item["value"] for item in container["env"]}
     volume_mounts = {item["name"]: item for item in container["volumeMounts"]}
     volumes = {item["name"]: item for item in sandbox_pod["spec"]["volumes"]}
+    proxy_yaml = fake_core.created_configmaps[0][1]["data"]["proxy.yaml"]
+    proxy_pod = fake_core.created_pods[0][1]
+    proxy_env = {
+        item["name"]: item
+        for item in proxy_pod["spec"]["containers"][0]["env"]
+    }
 
     assert "OPENAI_API_KEY" not in env
+    assert env["CODEX_AUTH_MODE"] == "access_token"
     assert "AMP_CONTINUE_THREAD_ID" not in env
     assert "CODEX_CONTINUE_THREAD_ID" not in env
     assert env["CENTAUR_CODEX_AUTH_JSON"] == "/home/agent/codex-auth/auth.json"
     assert env["CODEX_HOME"] == "/home/agent/.codex"
+    assert "openai-codex" in proxy_yaml
+    assert "OPENAI_CODEX_ACCOUNT_ID" in proxy_yaml
+    assert "OPENAI_API_KEY" not in proxy_yaml
+    assert proxy_env["IRON_BROKER_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "centaur-infra-env",
+        "key": "IRON_BROKER_TOKEN",
+    }
     assert volume_mounts["codex-auth"] == {
         "name": "codex-auth",
         "mountPath": "/home/agent/codex-auth",

@@ -1,6 +1,6 @@
-# Warrunner's default Meatspace deployment shape uses a mention-gated Discord
-# home channel. Forum-thread routing remains available when a real forum/media
-# channel is configured.
+# Warrunner's default Meatspace deployment shape is Discord-first: home-channel
+# turns are mention-gated, and explicit bot mentions in visible Discord threads
+# are allowed so work can happen where the team is already talking.
 
 api:
   executionWorkerEnabled: true
@@ -31,6 +31,9 @@ api:
 
 ironProxy:
   secretSource: env
+
+tokenBroker:
+  enabled: true
 
 toolServer:
   enabled: true
@@ -68,6 +71,7 @@ sandbox:
     existingSecretName: warrunner-codex-auth
     secretKey: auth.json
   extraEnv:
+    CODEX_AUTH_MODE: access_token
     WARRUNNER_RUNTIME_STATE_DIR: /var/lib/meepo
 
 repoCache:

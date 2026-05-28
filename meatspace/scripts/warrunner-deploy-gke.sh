@@ -7,7 +7,10 @@ EGRESS_NAMESPACE="${WARRUNNER_EGRESS_NAMESPACE:-centaur-egress}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-dapp-455423}"
 LOCATION="us-west1"
 REPOSITORY="warrunner"
-IMAGE_TAG="${WARRUNNER_IMAGE_TAG:-263a6e84}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_IMAGE_TAG="$(git -C "$REPO_ROOT" rev-parse --short=8 HEAD 2>/dev/null || printf 'dev')"
+IMAGE_TAG="${WARRUNNER_IMAGE_TAG:-$DEFAULT_IMAGE_TAG}"
 ENV_FILE="${WARRUNNER_DEPLOY_ENV_FILE:-$HOME/.config/warrunner/deploy.env}"
 RENDER_ONLY=0
 SKIP_IMAGE_CHECK=0
@@ -32,7 +35,7 @@ Options:
   --project <id>            Google Cloud project. Default: dapp-455423
   --location <name>         Artifact Registry location. Default: us-west1
   --repository <name>       Artifact Registry repository. Default: warrunner
-  --image-tag <tag>         Image tag. Default: 263a6e84
+  --image-tag <tag>         Image tag. Default: current git short SHA
   --env-file <path>         Deploy env file. Default: ~/.config/warrunner/deploy.env
   --render-only             Render Helm manifests and verify invariants; do not deploy
   --skip-image-check        Do not verify image tags in Artifact Registry
@@ -225,6 +228,20 @@ require_env("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "env")
 require_env("KUBERNETES_TOOL_SERVER_PORT", "8001")
 require_env("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS", "DISCORD_BOT_TOKEN")
 require_env("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "true")
+if not re.search(
+    r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n"
+    r"\s*value:\s*.*CODEX_AUTH_MODE.*access_token",
+    text,
+):
+    raise SystemExit(
+        "FATAL: rendered sandbox extra env does not set CODEX_AUTH_MODE=access_token"
+    )
+if "name: KUBERNETES_TOKEN_BROKER_NAME" not in text:
+    raise SystemExit("FATAL: rendered deployment does not enable token broker")
+if "name: KUBERNETES_TOKEN_BROKER_URL" not in text:
+    raise SystemExit("FATAL: rendered deployment does not publish token broker URL")
+if "name: IRON_BROKER_TOKEN" not in text:
+    raise SystemExit("FATAL: rendered deployment does not inject IRON_BROKER_TOKEN")
 if "name: DISCORD_BOT_TOKEN" not in text:
     raise SystemExit("FATAL: rendered deployment does not inject DISCORD_BOT_TOKEN")
 if re.search(r"name:\s*GITHUB_TOKEN\b", text):
@@ -358,6 +375,10 @@ require_cmd python3
 require_secret_key centaur-infra-env GITHUB_APP_ID
 require_secret_key centaur-infra-env GITHUB_APP_INSTALLATION_ID
 require_secret_one_key centaur-infra-env GITHUB_APP_PRIVATE_KEY GITHUB_APP_PRIVATE_KEY_BASE64
+require_secret_key centaur-infra-env IRON_BROKER_TOKEN
+require_secret_key centaur-infra-env OPENAI_CODEX_CLIENT_ID
+require_secret_key centaur-infra-env OPENAI_CODEX_BLOB
+require_secret_key centaur-infra-env OPENAI_CODEX_ACCOUNT_ID
 require_secret_key warrunner-codex-auth auth.json
 reject_secret_key centaur-infra-env OPENAI_API_KEY
 reject_secret_key centaur-infra-env GITHUB_TOKEN
