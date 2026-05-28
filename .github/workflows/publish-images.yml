@@ -33,6 +33,9 @@ env:
 
 jobs:
   publish:
+    # This workflow publishes Paradigm's upstream Centaur images. Meatspace's fork
+    # publishes Warrunner images through publish-warrunner-images.yml instead.
+    if: ${{ github.repository == 'paradigmxyz/centaur' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
