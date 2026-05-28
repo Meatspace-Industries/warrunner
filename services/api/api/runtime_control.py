@@ -1734,6 +1734,7 @@ async def release_assignment(
         "cancel_inflight": cancel_inflight,
     }
     req_hash = request_hash(payload)
+    cancelled_execution_ids: list[str] = []
 
     response: dict[str, Any]
     async with pool.acquire() as conn:
@@ -1777,12 +1778,16 @@ async def release_assignment(
                     generation,
                 )
                 if cancel_inflight:
-                    await conn.execute(
+                    cancelled_rows = await conn.fetch(
                         "UPDATE agent_execution_requests SET status = 'cancelled', terminal_reason = 'released', "
-                        "completed_at = NOW(), updated_at = NOW() "
-                        "WHERE thread_key = $1 AND status IN ('queued', 'running', 'cancel_requested', 'retry_wait')",
+                        "completed_at = NOW(), worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
+                        "WHERE thread_key = $1 AND status IN ('queued', 'running', 'cancel_requested', 'retry_wait') "
+                        "RETURNING execution_id",
                         thread_key,
                     )
+                    cancelled_execution_ids = [
+                        str(row["execution_id"]) for row in cancelled_rows
+                    ]
                 response = {
                     "ok": True,
                     "thread_key": thread_key,
@@ -1825,6 +1830,20 @@ async def release_assignment(
                     await stop_session_by_id(runtime_id, thread_key=thread_key)
             else:
                 await stop_session(thread_key)
+    if cancelled_execution_ids:
+        try:
+            from api.workflow_engine import notify_execution_terminal
+
+            for execution_id in cancelled_execution_ids:
+                await notify_execution_terminal(pool, execution_id)
+        except Exception:
+            log.warning(
+                "release_assignment_workflow_terminal_notify_failed",
+                thread_key=thread_key,
+                release_id=release_id,
+                cancelled_execution_count=len(cancelled_execution_ids),
+                exc_info=True,
+            )
     log.info(
         "thread_released",
         thread_key=thread_key,
@@ -2273,7 +2292,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                 ") "
                 "ORDER BY er.created_at ASC "
                 "LIMIT 32 "
-                "FOR UPDATE SKIP LOCKED"
+                "FOR UPDATE OF er SKIP LOCKED"
             )
             # Count how many workflow-linked executions are currently running
             # to enforce the slot reservation for user-facing requests.

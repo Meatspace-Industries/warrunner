@@ -261,6 +261,8 @@ ALLOWED_ROLE_IDS="${WARRUNNER_ALLOWED_ROLE_IDS:-$(env_value WARRUNNER_ALLOWED_RO
 ALLOWED_ROLE_IDS="${ALLOWED_ROLE_IDS:-$DEFAULT_ALLOWED_ROLE_IDS}"
 HELM_ALLOWED_ROLE_IDS="${ALLOWED_ROLE_IDS//,/\\,}"
 HELM_HOME_CHANNEL_IDS="${HOME_CHANNEL_IDS//,/\\,}"
+MENTION_USER_ALIASES="${WARRUNNER_MENTION_USER_ALIASES:-$(env_value WARRUNNER_MENTION_USER_ALIASES)}"
+HELM_MENTION_USER_ALIASES="${MENTION_USER_ALIASES//,/\\,}"
 DNS_IP_BLOCKS="${WARRUNNER_DNS_IP_BLOCKS:-$(env_value WARRUNNER_DNS_IP_BLOCKS)}"
 if [[ -z "$DNS_IP_BLOCKS" && "$RENDER_ONLY" != "1" ]]; then
   DNS_SERVICE_IP="$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
@@ -278,15 +280,15 @@ helm_args=(
   --set ironProxy.secretSource=env
   --set api.egressDiscovery.namespace="$EGRESS_NAMESPACE"
   --set api.image.repository="$REGISTRY/centaur-api"
-  --set api.image.tag="$IMAGE_TAG"
+  --set-string api.image.tag="$IMAGE_TAG"
   --set sandbox.image.repository="$REGISTRY/centaur-agent"
-  --set sandbox.image.tag="$IMAGE_TAG"
+  --set-string sandbox.image.tag="$IMAGE_TAG"
   --set ironProxy.image.repository="$REGISTRY/centaur-iron-proxy"
-  --set ironProxy.image.tag="$IMAGE_TAG"
+  --set-string ironProxy.image.tag="$IMAGE_TAG"
   --set discordbot.image.repository="$REGISTRY/warrunner-discordbot"
-  --set discordbot.image.tag="$IMAGE_TAG"
+  --set-string discordbot.image.tag="$IMAGE_TAG"
   --set overlay.image.repository="$REGISTRY/warrunner-overlay"
-  --set overlay.image.tag="$IMAGE_TAG"
+  --set-string overlay.image.tag="$IMAGE_TAG"
   --set-string "api.discordGuildId=$DISCORD_GUILD_ID"
   --set-string "discordbot.guildId=$DISCORD_GUILD_ID"
   --set-string "discordbot.botUserId=$DISCORD_BOT_USER_ID"
@@ -294,6 +296,10 @@ helm_args=(
   --set-string "discordbot.homeChannelIds=$HELM_HOME_CHANNEL_IDS"
   --set-string "discordbot.allowedRoleIds=$HELM_ALLOWED_ROLE_IDS"
 )
+
+if [[ -n "$MENTION_USER_ALIASES" ]]; then
+  helm_args+=(--set-string "discordbot.mentionUserAliases=$HELM_MENTION_USER_ALIASES")
+fi
 
 if [[ -n "$DNS_IP_BLOCKS" ]]; then
   IFS=',' read -r -a dns_ip_blocks <<< "$DNS_IP_BLOCKS"

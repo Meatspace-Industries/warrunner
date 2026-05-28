@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 import re
 from typing import Any
@@ -36,6 +37,43 @@ _BARE_PERSONA_PROMPT = (
     "Briefly introduce yourself using your active persona instructions and ask "
     "what we should work on."
 )
+_REMINDER_MIN_DELAY_S = 5
+_REMINDER_MAX_DELAY_S = 366 * 24 * 60 * 60
+_REMINDER_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+|plz\s+)?(?:can\s+you\s+)?remind\s+me\b[:,;\s-]*",
+    re.IGNORECASE,
+)
+_REMINDER_DURATION_RE = re.compile(
+    r"\bin\s+(?P<duration>"
+    r"(?:\d+(?:\.\d+)?\s*"
+    r"(?:weeks?|w|days?|d|hours?|hrs?|hr|h|minutes?|mins?|min|m|"
+    r"seconds?|secs?|sec|s)(?![A-Za-z])\s*){1,4})",
+    re.IGNORECASE,
+)
+_REMINDER_TOMORROW_RE = re.compile(r"\btomorrow\b", re.IGNORECASE)
+_REMINDER_ABSOLUTE_RE = re.compile(
+    r"\b(?:at|on)\s+"
+    r"(?P<absolute>"
+    r"\d{4}-\d{2}-\d{2}"
+    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"
+    r"(?:\s*(?:Z|UTC))?"
+    r")",
+    re.IGNORECASE,
+)
+_REMINDER_COMPONENT_RE = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>weeks?|w|days?|d|hours?|hrs?|hr|h|minutes?|mins?|min|m|"
+    r"seconds?|secs?|sec|s)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_REMINDER_POLITENESS_RE = re.compile(
+    r"(?:\s|[,.;:!-])+(?:please|plz|pls|thanks|thank you)+\s*$",
+    re.IGNORECASE,
+)
+_REMINDER_LEADING_TEXT_RE = re.compile(
+    r"^(?:to|about|that|for)\s+",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +83,13 @@ class PromptSelection:
     repo: str | None
     ambiguous_repos: tuple[str, ...]
     parts: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class ReminderRequest:
+    reminder_text: str
+    due_at: dt.datetime
+    delay_seconds: int
 
 
 @dataclass
@@ -73,6 +118,148 @@ class Input:
             "workflow input must include non-empty parts or text",
             422,
         )
+
+
+def _format_utc(when: dt.datetime) -> str:
+    return when.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _text_from_parts(parts: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        part.get("text", "").strip()
+        for part in parts
+        if part.get("type") == "text" and isinstance(part.get("text"), str)
+    ).strip()
+
+
+def _duration_seconds(raw_duration: str) -> int:
+    total = 0.0
+    matched = False
+    for match in _REMINDER_COMPONENT_RE.finditer(raw_duration):
+        matched = True
+        value = float(match.group("value"))
+        unit = match.group("unit").lower()
+        if unit.startswith("w"):
+            total += value * 7 * 24 * 60 * 60
+        elif unit.startswith("d"):
+            total += value * 24 * 60 * 60
+        elif unit.startswith("h"):
+            total += value * 60 * 60
+        elif unit.startswith("m"):
+            total += value * 60
+        else:
+            total += value
+    if not matched:
+        raise ControlPlaneError(
+            "UNSUPPORTED_REMINDER_TIME",
+            "I can set reminders like 'remind me in 4h to check this'.",
+            422,
+        )
+    return int(round(total))
+
+
+def _clean_reminder_text(raw: str) -> str:
+    text = _REMINDER_POLITENESS_RE.sub("", raw).strip(" \t\n\r.,;:-")
+    text = _REMINDER_LEADING_TEXT_RE.sub("", text).strip(" \t\n\r.,;:-")
+    return text or "you asked me to remind you"
+
+
+def _extract_reminder_request(
+    parts: list[dict[str, Any]],
+    *,
+    now: dt.datetime | None = None,
+) -> ReminderRequest | None:
+    text = _text_from_parts(parts)
+    if not text:
+        return None
+    prefix = _REMINDER_PREFIX_RE.match(text)
+    if not prefix:
+        return None
+
+    body = text[prefix.end():].strip()
+    effective_now = now or dt.datetime.now(dt.timezone.utc)
+    if effective_now.tzinfo is None:
+        effective_now = effective_now.replace(tzinfo=dt.timezone.utc)
+    effective_now = effective_now.astimezone(dt.timezone.utc)
+
+    duration = _REMINDER_DURATION_RE.search(body)
+    tomorrow = None if duration else _REMINDER_TOMORROW_RE.search(body)
+    absolute = None if duration or tomorrow else _REMINDER_ABSOLUTE_RE.search(body)
+    if duration:
+        delay_seconds = _duration_seconds(duration.group("duration"))
+        due_at = effective_now + dt.timedelta(seconds=delay_seconds)
+        reminder_text = _clean_reminder_text(
+            f"{body[:duration.start()]} {body[duration.end():]}",
+        )
+    elif tomorrow:
+        due_at = effective_now + dt.timedelta(days=1)
+        delay_seconds = int(round((due_at - effective_now).total_seconds()))
+        reminder_text = _clean_reminder_text(
+            f"{body[:tomorrow.start()]} {body[tomorrow.end():]}",
+        )
+    elif absolute:
+        due_at = _parse_absolute_reminder_time(
+            absolute.group("absolute"),
+            now=effective_now,
+        )
+        delay_seconds = int(round((due_at - effective_now).total_seconds()))
+        reminder_text = _clean_reminder_text(
+            f"{body[:absolute.start()]} {body[absolute.end():]}",
+        )
+    else:
+        raise ControlPlaneError(
+            "UNSUPPORTED_REMINDER_TIME",
+            (
+                "I can set reminders like 'remind me in 4h to check this', "
+                "'remind me tomorrow', or 'remind me at 2026-05-28 13:00 UTC'."
+            ),
+            422,
+        )
+    if delay_seconds < _REMINDER_MIN_DELAY_S:
+        raise ControlPlaneError(
+            "REMINDER_TOO_SOON",
+            f"Reminder delay must be at least {_REMINDER_MIN_DELAY_S} seconds.",
+            422,
+        )
+    if delay_seconds > _REMINDER_MAX_DELAY_S:
+        raise ControlPlaneError(
+            "REMINDER_TOO_FAR",
+            "Reminder delay must be 366 days or less.",
+            422,
+        )
+
+    return ReminderRequest(
+        reminder_text=reminder_text,
+        due_at=due_at,
+        delay_seconds=delay_seconds,
+    )
+
+
+def _parse_absolute_reminder_time(raw: str, *, now: dt.datetime) -> dt.datetime:
+    text = raw.strip()
+    if re.search(r"\b(?:Z|UTC)$", text, flags=re.IGNORECASE):
+        text = re.sub(r"\s*UTC$", "+00:00", text, flags=re.IGNORECASE)
+        text = re.sub(r"Z$", "+00:00", text, flags=re.IGNORECASE)
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ControlPlaneError(
+            "UNSUPPORTED_REMINDER_TIME",
+            (
+                "I can set absolute reminders like "
+                "'remind me at 2026-05-28 13:00 UTC'."
+            ),
+            422,
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _discord_delivery(delivery: dict[str, Any] | None) -> dict[str, Any]:
+    result = dict(delivery or {})
+    result.setdefault("platform", "discord")
+    return result
 
 
 def _known_personas() -> set[str]:
@@ -331,8 +518,81 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             422,
         )
 
+    effective_parts = inp.effective_parts
+    try:
+        reminder = _extract_reminder_request(effective_parts)
+    except ControlPlaneError as exc:
+        if not exc.code.startswith("REMINDER_") and exc.code != "UNSUPPORTED_REMINDER_TIME":
+            raise
+        delivery = _discord_delivery(inp.delivery)
+        await ctx.enqueue_final_delivery(
+            "discord_reminder_rejected",
+            thread_key=thread_key,
+            delivery=delivery,
+            final_payload={
+                "result_text": f"I couldn't schedule that reminder: {exc.message}",
+                "workflow_run_id": ctx.run_id,
+            },
+            delivery_id=f"workflow:{ctx.run_id}:discord-reminder-rejected",
+        )
+        return {
+            "ok": False,
+            "kind": "discord_reminder_rejected",
+            "code": exc.code,
+            "message": exc.message,
+        }
+    if reminder is not None:
+        delivery = _discord_delivery(inp.delivery)
+        child = await ctx.start_workflow(
+            "start_discord_reminder",
+            workflow_name="discord_reminder",
+            trigger_key=f"discord-reminder:{inp.message_id or ctx.run_id}",
+            run_input={
+                "thread_key": thread_key,
+                "delivery": delivery,
+                "message_id": inp.message_id,
+                "user_id": inp.user_id,
+                "reminder_text": reminder.reminder_text,
+                "due_at": reminder.due_at.isoformat(),
+                "requested_delay_seconds": reminder.delay_seconds,
+                "metadata": {
+                    **dict(inp.metadata or {}),
+                    "source": "discordbot",
+                    "platform": "discord",
+                    "workflow_name": "discord_reminder",
+                    "parent_workflow_run_id": ctx.run_id,
+                },
+            },
+            eager_start=False,
+        )
+        ack_text = (
+            f"Reminder queued for {_format_utc(reminder.due_at)}. "
+            "I'll post it back here."
+        )
+        await ctx.enqueue_final_delivery(
+            "discord_reminder_ack",
+            thread_key=thread_key,
+            delivery=delivery,
+            final_payload={
+                "result_text": ack_text,
+                "workflow_run_id": ctx.run_id,
+                "reminder_run_id": child.get("run_id"),
+                "reminder_due_at": reminder.due_at.isoformat(),
+                "reminder_text": reminder.reminder_text,
+            },
+            delivery_id=f"workflow:{ctx.run_id}:discord-reminder-ack",
+        )
+        return {
+            "ok": True,
+            "kind": "discord_reminder_scheduled",
+            "reminder_run_id": child.get("run_id"),
+            "due_at": reminder.due_at.isoformat(),
+            "delay_seconds": reminder.delay_seconds,
+            "reminder_text": reminder.reminder_text,
+        }
+
     selection = _extract_prompt_selection(
-        inp.effective_parts,
+        effective_parts,
         explicit_harness=inp.harness,
         explicit_persona=inp.persona,
         explicit_repo=inp.repo,
