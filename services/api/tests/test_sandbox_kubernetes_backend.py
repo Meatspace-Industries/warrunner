@@ -1507,6 +1507,9 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db/centaur")
     monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_NAME", "codex-auth")
+    monkeypatch.setenv("AGENT_IMAGE", "centaur-agent:test")
     monkeypatch.setenv("CENTAUR_OVERLAY_DIR", "/app/overlay/org")
     monkeypatch.setenv("CENTAUR_OVERLAY_IMAGE", "ghcr.io/example/overlay:sha-test")
     monkeypatch.setenv("CENTAUR_OVERLAY_IMAGE_PULL_POLICY", "Always")
@@ -1535,6 +1538,11 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     assert env["DATABASE_URL"]["value"] == proxied_database_url
     assert env["WORKFLOW_DIRS"]["value"] == "/app/workflows:/app/overlay/org/workflows"
     assert env["CENTAUR_OVERLAY_DIR"]["value"] == "/app/overlay/org"
+    assert env["CENTAUR_OVERLAY_IMAGE"]["value"] == "ghcr.io/example/overlay:sha-test"
+    assert env["AGENT_IMAGE"]["value"] == "centaur-agent:test"
+    assert env["KUBERNETES_FIREWALL_CA_SECRET_NAME"]["value"] == "firewall-ca"
+    assert env["KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME"]["value"] == "firewall-ca-key"
+    assert env["KUBERNETES_CODEX_AUTH_SECRET_NAME"]["value"] == "codex-auth"
     assert env["DISCORD_GUILD_ID"]["value"] == "guild-1"
     assert env["DISCORD_ETL_ENABLED"]["value"] == "1"
     assert env["DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS"]["value"] == "*legal*"

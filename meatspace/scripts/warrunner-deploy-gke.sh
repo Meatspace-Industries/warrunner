@@ -259,8 +259,26 @@ require_env(
     "KUBERNETES_WORKFLOW_RUN_SERVICE_ACCOUNT_NAME",
     f"{os.environ['WARRUNNER_RENDER_RELEASE_NAME']}-centaur-api",
 )
-require_env("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS", "DISCORD_BOT_TOKEN")
 require_env("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "true")
+secret_keys = re.search(
+    r"name:\s*KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS\s*\n"
+    r"\s*value:\s*[\"']?(?P<value>[^\"'\n]+)",
+    text,
+)
+if not secret_keys:
+    raise SystemExit(
+        "FATAL: rendered deployment does not set KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS"
+    )
+for name in (
+    "DISCORD_BOT_TOKEN",
+    "GITHUB_APP_ID",
+    "GITHUB_APP_INSTALLATION_ID",
+    "GITHUB_APP_PRIVATE_KEY",
+):
+    if name not in secret_keys.group("value").split(","):
+        raise SystemExit(
+            "FATAL: rendered workflow-run secret env keys are missing " + name
+        )
 if not re.search(
     r"name:\s*KUBERNETES_SANDBOX_EXTRA_ENV\s*\n"
     r"\s*value:\s*.*CODEX_AUTH_MODE.*access_token",

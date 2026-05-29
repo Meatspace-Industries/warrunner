@@ -26,6 +26,7 @@ api:
     GITHUB_APP_REPO_SESSION_REFRESH_MARGIN_S: "2700"
     # Cold GKE nodes can take longer than Centaur's 60s default to pull the agent image.
     KUBERNETES_SANDBOX_READY_TIMEOUT_S: "300"
+    KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS: DISCORD_BOT_TOKEN,GITHUB_APP_ID,GITHUB_APP_INSTALLATION_ID,GITHUB_APP_PRIVATE_KEY
     WARRUNNER_ALLOWED_GITHUB_REPOS: Meatspace-Industries/dappios,Meatspace-Industries/dapp-backend,Meatspace-Industries/dappweb
     WARRUNNER_GITHUB_REPO_ALIASES: dappios=Meatspace-Industries/dappios,dapp-ios=Meatspace-Industries/dappios,ios=Meatspace-Industries/dappios,dapp-backend=Meatspace-Industries/dapp-backend,backend=Meatspace-Industries/dapp-backend,dappweb=Meatspace-Industries/dappweb,dapp-web=Meatspace-Industries/dappweb,web=Meatspace-Industries/dappweb
 
