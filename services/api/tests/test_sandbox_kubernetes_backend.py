@@ -1515,6 +1515,7 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     monkeypatch.setenv("CENTAUR_OVERLAY_IMAGE_PULL_POLICY", "Always")
     monkeypatch.setenv("CENTAUR_OVERLAY_IMAGE_SOURCE_PATH", "/overlay")
     monkeypatch.setenv("WORKFLOW_DIRS", "/app/workflows:/app/overlay/org/workflows")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.8.0.1")
     monkeypatch.setenv("DISCORD_GUILD_ID", "guild-1")
     monkeypatch.setenv("DISCORD_ETL_ENABLED", "1")
     monkeypatch.setenv("DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS", "*legal*")
@@ -1543,6 +1544,12 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     assert env["KUBERNETES_FIREWALL_CA_SECRET_NAME"]["value"] == "firewall-ca"
     assert env["KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME"]["value"] == "firewall-ca-key"
     assert env["KUBERNETES_CODEX_AUTH_SECRET_NAME"]["value"] == "codex-auth"
+    assert env["NO_PROXY"]["value"] == (
+        "localhost,127.0.0.1,run-proxy,api.internal,kubernetes,"
+        "kubernetes.default,kubernetes.default.svc,"
+        "kubernetes.default.svc.cluster.local,10.8.0.1"
+    )
+    assert env["no_proxy"]["value"] == env["NO_PROXY"]["value"]
     assert env["DISCORD_GUILD_ID"]["value"] == "guild-1"
     assert env["DISCORD_ETL_ENABLED"]["value"] == "1"
     assert env["DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS"]["value"] == "*legal*"

@@ -323,6 +323,21 @@ def _workflow_run_secret_env_names() -> list[str]:
     return out
 
 
+def _workflow_run_no_proxy_value(firewall_host: str, api_host: str) -> str:
+    hosts = [
+        "localhost",
+        "127.0.0.1",
+        firewall_host,
+        api_host,
+        "kubernetes",
+        "kubernetes.default",
+        "kubernetes.default.svc",
+        "kubernetes.default.svc.cluster.local",
+        os.getenv("KUBERNETES_SERVICE_HOST", "").strip(),
+    ]
+    return ",".join(dict.fromkeys(host for host in hosts if host))
+
+
 def _api_database_pg_secret() -> PgDsnSecret | None:
     database_url = (os.getenv("DATABASE_URL") or "").strip()
     if not database_url:
@@ -2288,10 +2303,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         api_url = os.getenv("AGENT_API_URL", "http://api:8000")
         proxy_url = f"http://{firewall_host}:{_proxy_port()}"
         api_host = urlsplit(api_url).hostname or ""
-        no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
-        if api_host:
-            no_proxy_hosts.append(api_host)
-        no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
+        no_proxy = _workflow_run_no_proxy_value(firewall_host, api_host)
         tool_dirs = (os.getenv("TOOL_DIRS") or "/app/tools").strip()
         workflow_dirs = (os.getenv("WORKFLOW_DIRS") or "/app/workflows").strip()
 
