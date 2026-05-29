@@ -61,6 +61,7 @@ discordbot:
   homeChannelIds: ""
   intakeChannelIds: ""
   allowedRoleIds: ""
+  mentionRoleIds: "1508633681919742116"
   mentionUserAliases: "meepo=1500785594068897792"
   historyLimit: 40
   requireHomeThread: true

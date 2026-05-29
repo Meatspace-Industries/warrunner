@@ -39,6 +39,7 @@ const EnvSchema = z.object({
   WARRUNNER_HOME_CHANNEL_IDS: ListFromEnv,
   WARRUNNER_INTAKE_CHANNEL_IDS: ListFromEnv,
   WARRUNNER_ALLOWED_ROLE_IDS: ListFromEnv,
+  WARRUNNER_MENTION_ROLE_IDS: ListFromEnv,
   WARRUNNER_MENTION_USER_ALIASES: ListFromEnv,
   WARRUNNER_HISTORY_LIMIT: z.coerce.number().int().min(0).max(100).default(40),
   WARRUNNER_REQUIRE_HOME_THREAD: BoolFromEnv,

@@ -35,6 +35,11 @@ describe('normalizeDiscordText', () => {
     const config = loadConfig(env())
     expect(normalizeDiscordText('<@999> hi <#123> <@456>', config)).toBe('hi #123 @456')
   })
+
+  it('strips configured bot role mentions', () => {
+    const config = loadConfig(env({ WARRUNNER_MENTION_ROLE_IDS: '111' }))
+    expect(normalizeDiscordText('<@&111> hi <@&222>', config)).toBe('hi @role:222')
+  })
 })
 
 describe('normalizeDiscordMessage', () => {
@@ -66,6 +71,24 @@ describe('normalizeDiscordMessage', () => {
         id: 'home-msg-1',
         channel_id: 'home-1',
         content: '<@999> start a home-channel task'
+      }),
+      config
+    })
+
+    expect(normalized?.thread_key).toBe('discord:guild-1:home-1:home-1')
+    expect(normalized?.parts[0]?.text).toBe('start a home-channel task')
+    expect(normalized?.discord.is_mention).toBe(true)
+  })
+
+  it('accepts configured role-mentioned messages in a configured home channel', () => {
+    const config = loadConfig(env({ WARRUNNER_MENTION_ROLE_IDS: '111' }))
+    const normalized = normalizeDiscordMessage({
+      message: message({
+        id: 'home-role-msg-1',
+        channel_id: 'home-1',
+        content: '<@&111> start a home-channel task',
+        mentions: [],
+        mention_roles: ['111']
       }),
       config
     })
@@ -172,6 +195,23 @@ describe('normalizeDiscordMessage', () => {
           channel_id: 'random-thread',
           content: '<@999> literal text, not a parsed Discord mention',
           mentions: []
+        }),
+        config,
+        parentChannelId: 'random-forum'
+      })
+    ).toBeNull()
+  })
+
+  it('rejects raw role-mention-looking text outside configured routes without a parsed Discord role mention', () => {
+    const config = loadConfig(env({ WARRUNNER_MENTION_ROLE_IDS: '111' }))
+    expect(
+      normalizeDiscordMessage({
+        message: message({
+          id: 'outside-role-msg-1',
+          channel_id: 'random-thread',
+          content: '<@&111> literal text, not a parsed Discord role mention',
+          mentions: [],
+          mention_roles: []
         }),
         config,
         parentChannelId: 'random-forum'

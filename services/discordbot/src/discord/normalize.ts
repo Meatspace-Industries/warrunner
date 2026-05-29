@@ -117,6 +117,9 @@ export function normalizeDiscordText(input: string, config: AppConfig): string {
   for (const botId of botMentionIds(config)) {
     text = text.replaceAll(`<@${botId}>`, '').replaceAll(`<@!${botId}>`, '')
   }
+  for (const roleId of botRoleMentionIds(config)) {
+    text = text.replaceAll(`<@&${roleId}>`, '')
+  }
   return text
     .replace(/<#(\d+)>/g, '#$1')
     .replace(/<@!?(\d+)>/g, '@$1')
@@ -127,10 +130,18 @@ export function normalizeDiscordText(input: string, config: AppConfig): string {
 
 function mentionsBot(message: DiscordMessage, config: AppConfig): boolean {
   const ids = botMentionIds(config)
-  if (!ids.length) return false
-  if (message.mentions) return message.mentions.some(user => ids.includes(user.id))
+  const roleIds = botRoleMentionIds(config)
+  if (!ids.length && !roleIds.length) return false
+  if (message.mentions?.some(user => ids.includes(user.id))) return true
+  if (message.mention_roles?.some(roleId => roleIds.includes(roleId))) return true
   const content = message.content ?? ''
-  if (ids.some(id => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`))) return true
+  if (
+    !message.mentions &&
+    ids.some(id => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`))
+  ) {
+    return true
+  }
+  if (!message.mention_roles && roleIds.some(id => content.includes(`<@&${id}>`))) return true
   return false
 }
 
@@ -139,6 +150,10 @@ function botMentionIds(config: AppConfig): string[] {
     .map(value => value?.trim())
     .filter((value): value is string => Boolean(value))
   return [...new Set(ids)]
+}
+
+function botRoleMentionIds(config: AppConfig): string[] {
+  return [...new Set(config.WARRUNNER_MENTION_ROLE_IDS.map(value => value.trim()).filter(Boolean))]
 }
 
 function attachmentText(message: DiscordMessage): string {

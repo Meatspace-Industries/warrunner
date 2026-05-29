@@ -24,6 +24,7 @@ import structlog
 from api.config import settings
 from api.db import close_pool, create_pool
 from api.logging_config import configure_structlog
+from api.agent import set_db_pool_override
 from api.workflow_engine import (
     _run_handler,
     discover_workflow_handlers,
@@ -35,6 +36,7 @@ log = structlog.get_logger().bind(service="workflow-executor")
 
 async def _run(run_id: str) -> int:
     pool = await create_pool(settings.database_url)
+    set_db_pool_override(pool)
     try:
         discover_workflow_handlers()
         row = await pool.fetchrow(
@@ -64,6 +66,7 @@ async def _run(run_id: str) -> int:
         log.info("workflow_executor_finished", run_id=run_id)
         return 0
     finally:
+        set_db_pool_override(None)
         await close_pool(pool)
 
 

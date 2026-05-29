@@ -240,6 +240,10 @@ lookup.
 Set `WARRUNNER_HOME_CHANNEL_MENTION_REQUIRED=false` only if the home channel is
 dedicated to Warrunner and every message there should start a turn.
 
+Set `WARRUNNER_MENTION_ROLE_IDS` when users should be able to trigger
+Warrunner by mentioning a Discord role instead of the bot user. The Meatspace
+deployment uses this for the managed `warrunner` role.
+
 Set `WARRUNNER_MENTION_USER_ALIASES` to comma-separated `alias=user_id` entries
 when Warrunner should turn final-answer text like `@Meepo` into an actual
 Discord user mention. Discord `allowed_mentions.parse` remains empty; only

@@ -732,6 +732,10 @@ spec:
             - name: WARRUNNER_ALLOWED_ROLE_IDS
               value: {{ .Values.discordbot.allowedRoleIds | quote }}
 {{- end }}
+{{- if and .Values.discordbot.mentionRoleIds (not (hasKey $discordbotExtraEnv "WARRUNNER_MENTION_ROLE_IDS")) }}
+            - name: WARRUNNER_MENTION_ROLE_IDS
+              value: {{ .Values.discordbot.mentionRoleIds | quote }}
+{{- end }}
 {{- if and .Values.discordbot.mentionUserAliases (not (hasKey $discordbotExtraEnv "WARRUNNER_MENTION_USER_ALIASES")) }}
             - name: WARRUNNER_MENTION_USER_ALIASES
               value: {{ .Values.discordbot.mentionUserAliases | quote }}

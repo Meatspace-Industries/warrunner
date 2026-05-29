@@ -48,4 +48,13 @@ describe('loadConfig', () => {
       ['warrunner', '1508581976779657369']
     ])
   })
+
+  it('parses configured bot mention role ids', () => {
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      WARRUNNER_MENTION_ROLE_IDS: 'role-a,role-b role-c'
+    } as unknown as NodeJS.ProcessEnv)
+
+    expect(config.WARRUNNER_MENTION_ROLE_IDS).toEqual(['role-a', 'role-b', 'role-c'])
+  })
 })

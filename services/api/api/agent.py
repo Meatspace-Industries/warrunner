@@ -43,6 +43,8 @@ from api.trace_context import get_or_create_thread_trace_id
 
 log = structlog.get_logger()
 
+_DB_POOL_OVERRIDE: Any | None = None
+
 _GITHUB_HANDLE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _GITHUB_URL_RE = re.compile(
     r"(?:https?://)?github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
@@ -207,8 +209,20 @@ def _turn_input_metrics(turn_input: dict[str, Any]) -> dict[str, Any]:
 # ── DB pool access ───────────────────────────────────────────────────────────
 
 
+def set_db_pool_override(pool: Any | None) -> None:
+    """Set the DB pool used outside the FastAPI app lifecycle.
+
+    Workflow executor pods run one workflow without starting the API app, but
+    this module still owns legacy session helpers used by agent turns.
+    """
+    global _DB_POOL_OVERRIDE
+    _DB_POOL_OVERRIDE = pool
+
+
 def _get_pool():
     """Get the asyncpg pool from the FastAPI app state."""
+    if _DB_POOL_OVERRIDE is not None:
+        return _DB_POOL_OVERRIDE
     from api.app import app
 
     return app.state.db_pool

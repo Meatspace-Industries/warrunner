@@ -203,6 +203,7 @@
         "homeChannelIds": { "type": "string" },
         "intakeChannelIds": { "type": "string" },
         "allowedRoleIds": { "type": "string" },
+        "mentionRoleIds": { "type": "string" },
         "mentionUserAliases": { "type": "string" },
         "historyLimit": { "type": "integer" },
         "requireHomeThread": { "type": "boolean" },

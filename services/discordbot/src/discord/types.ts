@@ -29,6 +29,7 @@ export type DiscordMessage = {
   member?: DiscordMember
   attachments?: DiscordAttachment[]
   mentions?: DiscordUser[]
+  mention_roles?: string[]
   message_reference?: DiscordMessageReference
   referenced_message?: DiscordMessage | null
   webhook_id?: string

@@ -241,6 +241,7 @@ discordbot:
   homeChannelIds: ""
   intakeChannelIds: ""
   allowedRoleIds: ""
+  mentionRoleIds: ""
   mentionUserAliases: ""
   historyLimit: 40
   requireHomeThread: true
