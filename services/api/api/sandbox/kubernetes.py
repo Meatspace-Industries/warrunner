@@ -68,6 +68,7 @@ _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
 _CODEX_AUTH_MOUNT_DIR = "/home/agent/codex-auth"
 _WORKFLOW_RUN_OVERLAY_DIR = "/app/overlay/org"
+_WORKFLOW_RUN_POD_PREFIX = "centaur-centaur-workflow-run"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
@@ -127,6 +128,11 @@ def _runtime_class_name() -> str | None:
 def _service_account_name() -> str | None:
     value = (os.getenv("KUBERNETES_SANDBOX_SERVICE_ACCOUNT_NAME") or "").strip()
     return value or None
+
+
+def _workflow_run_service_account_name() -> str | None:
+    value = (os.getenv("KUBERNETES_WORKFLOW_RUN_SERVICE_ACCOUNT_NAME") or "").strip()
+    return value or _service_account_name()
 
 
 def _state_volume_enabled() -> bool:
@@ -207,7 +213,11 @@ def _workflow_run_image_pull_policy() -> str:
 
 
 def _workflow_run_pod_name(run_id: str) -> str:
-    return _resource_name("centaur-centaur-workflow-run", run_id)
+    return _resource_name(_WORKFLOW_RUN_POD_PREFIX, run_id)
+
+
+def _is_workflow_run_pod_name(name: str) -> bool:
+    return name.startswith(f"{_WORKFLOW_RUN_POD_PREFIX}-")
 
 
 _WORKFLOW_RUN_PASSTHROUGH_ENV_NAMES = (
@@ -1148,6 +1158,36 @@ class KubernetesExecutorBackend(SandboxBackend):
         for _, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
             sandbox_to_proxy_ports.append({"protocol": "TCP", "port": port})
 
+        sandbox_egress = [
+            {
+                "to": [
+                    {
+                        "podSelector": {
+                            "matchLabels": _api_pod_match_labels()
+                        }
+                    }
+                ],
+                "ports": [{"protocol": "TCP", "port": 8000}],
+            },
+            {
+                "to": [
+                    {
+                        "podSelector": {
+                            "matchLabels": {
+                                _PROXY_LABEL: "true",
+                                "centaur.ai/sandbox-id": sandbox_id,
+                            }
+                        }
+                    }
+                ],
+                "ports": sandbox_to_proxy_ports,
+            },
+        ]
+        if _is_workflow_run_pod_name(sandbox_id):
+            # Workflow executors are control-plane code and may spawn/attach
+            # agent sandboxes through the in-cluster Kubernetes API.
+            sandbox_egress.append({"ports": [{"protocol": "TCP", "port": 443}]})
+
         proxy_egress = [
             {
                 "to": [{"podSelector": {"matchLabels": _api_pod_match_labels()}}],
@@ -1193,31 +1233,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                         }
                     },
                     "policyTypes": ["Egress"],
-                    "egress": [
-                        {
-                            "to": [
-                                {
-                                    "podSelector": {
-                                        "matchLabels": _api_pod_match_labels()
-                                    }
-                                }
-                            ],
-                            "ports": [{"protocol": "TCP", "port": 8000}],
-                        },
-                        {
-                            "to": [
-                                {
-                                    "podSelector": {
-                                        "matchLabels": {
-                                            _PROXY_LABEL: "true",
-                                            "centaur.ai/sandbox-id": sandbox_id,
-                                        }
-                                    }
-                                }
-                            ],
-                            "ports": sandbox_to_proxy_ports,
-                        },
-                    ],
+                    "egress": sandbox_egress,
                 },
             },
         )
@@ -2341,9 +2357,10 @@ class KubernetesExecutorBackend(SandboxBackend):
                 }
             )
 
+        service_account = _workflow_run_service_account_name()
         spec: dict[str, Any] = {
             "restartPolicy": "Never",
-            "automountServiceAccountToken": False,
+            "automountServiceAccountToken": service_account is not None,
             "imagePullSecrets": _image_pull_secrets(),
             "initContainers": init_containers,
             "containers": [
@@ -2372,7 +2389,6 @@ class KubernetesExecutorBackend(SandboxBackend):
             ],
             "volumes": volumes,
         }
-        service_account = _service_account_name()
         if service_account:
             spec["serviceAccountName"] = service_account
         return {

@@ -395,6 +395,10 @@ spec:
               value: {{ printf "%s:%s" .Values.api.image.repository .Values.api.image.tag | quote }}
             - name: KUBERNETES_WORKFLOW_RUN_IMAGE_PULL_POLICY
               value: {{ .Values.api.image.pullPolicy | quote }}
+{{- if not (hasKey $apiExtraEnv "KUBERNETES_WORKFLOW_RUN_SERVICE_ACCOUNT_NAME") }}
+            - name: KUBERNETES_WORKFLOW_RUN_SERVICE_ACCOUNT_NAME
+              value: {{ include "centaur.apiServiceAccountName" . | quote }}
+{{- end }}
 {{- if and .Values.api.discordEtlEnabled (not (hasKey $apiExtraEnv "KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS")) }}
             - name: KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS
               value: "DISCORD_BOT_TOKEN"

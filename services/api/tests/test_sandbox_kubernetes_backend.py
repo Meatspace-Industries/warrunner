@@ -1515,6 +1515,7 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     monkeypatch.setenv("DISCORD_GUILD_ID", "guild-1")
     monkeypatch.setenv("DISCORD_ETL_ENABLED", "1")
     monkeypatch.setenv("DISCORD_ETL_EXCLUDED_CHANNEL_PATTERNS", "*legal*")
+    monkeypatch.setenv("KUBERNETES_WORKFLOW_RUN_SERVICE_ACCOUNT_NAME", "api-runner")
     monkeypatch.setenv("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS", "DISCORD_BOT_TOKEN")
 
     proxied_database_url = "postgresql://app_user:pw@run-proxy:5432/centaur"
@@ -1529,6 +1530,8 @@ def test_workflow_run_pod_mounts_overlay_and_discord_etl_env(
     mounts = {item["name"]: item for item in container["volumeMounts"]}
     volumes = {item["name"]: item for item in spec["volumes"]}
 
+    assert spec["serviceAccountName"] == "api-runner"
+    assert spec["automountServiceAccountToken"] is True
     assert env["DATABASE_URL"]["value"] == proxied_database_url
     assert env["WORKFLOW_DIRS"]["value"] == "/app/workflows:/app/overlay/org/workflows"
     assert env["CENTAUR_OVERLAY_DIR"]["value"] == "/app/overlay/org"
@@ -1604,6 +1607,31 @@ async def test_spawn_workflow_run_uses_proxy_for_database_url(
         "DATABASE_URL"
     ]
     assert workflow_env["DATABASE_URL"].endswith(":5432/centaur")
+
+    sandbox_policy = fake_networking.created_network_policies[0][1]
+    assert sandbox_policy["spec"]["podSelector"]["matchLabels"][
+        "centaur.ai/sandbox-id"
+    ].startswith("centaur-centaur-workflow-run-")
+    assert {"ports": [{"protocol": "TCP", "port": 443}]} in sandbox_policy["spec"][
+        "egress"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_regular_sandbox_egress_policy_does_not_allow_direct_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_networking = FakeNetworkingApi()
+    backend._networking = fake_networking
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+
+    await backend._create_proxy_network_policies("centaur-centaur-sandbox-test", {})
+
+    sandbox_policy = fake_networking.created_network_policies[0][1]
+    assert {"ports": [{"protocol": "TCP", "port": 443}]} not in sandbox_policy["spec"][
+        "egress"
+    ]
 
 
 @pytest.mark.asyncio

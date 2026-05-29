@@ -234,7 +234,8 @@ verify_rendered_invariants() {
     echo "FATAL: rendered deployment still injects OPENAI_API_KEY" >&2
     exit 1
   fi
-  python3 - "$rendered" <<'PY'
+  WARRUNNER_RENDER_RELEASE_NAME="$RELEASE_NAME" python3 - "$rendered" <<'PY'
+import os
 import re
 import sys
 
@@ -254,6 +255,10 @@ require_env("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "env")
 require_env("FIREWALL_MANAGER_TOKEN_BROKER_STORE_SOURCE", "file")
 require_env("IRON_TOKEN_BROKER_FILE_STORE_DIR", "/var/lib/iron-token-broker")
 require_env("KUBERNETES_TOOL_SERVER_PORT", "8001")
+require_env(
+    "KUBERNETES_WORKFLOW_RUN_SERVICE_ACCOUNT_NAME",
+    f"{os.environ['WARRUNNER_RENDER_RELEASE_NAME']}-centaur-api",
+)
 require_env("KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS", "DISCORD_BOT_TOKEN")
 require_env("CENTAUR_REQUIRE_GITHUB_APP_AUTH", "true")
 if not re.search(
