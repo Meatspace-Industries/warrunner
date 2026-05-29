@@ -276,6 +276,59 @@ describe('pollFinalDeliveriesOnce', () => {
     ])
   })
 
+  it('rewrites configured leading addressee aliases into safe Discord mentions', async () => {
+    const posts: Array<{ channelId: string; body: any }> = []
+    globalThis.fetch = (async input => {
+      const url = new URL(String(input))
+      if (url.pathname === '/agent/final-deliveries/claim') {
+        return Response.json({
+          deliveries: [
+            {
+              execution_id: 'exec-leading-alias',
+              thread_key: 'discord:guild-1:forum-1:thread-1',
+              delivery: { platform: 'discord', guild_id: 'guild-1', thread_id: 'thread-1' },
+              final_payload: {
+                result_text: 'Meepo: stop tracking these as Codex failures for now.'
+              }
+            }
+          ]
+        })
+      }
+      if (url.pathname === '/agent/final-deliveries/exec-leading-alias/delivered') {
+        return Response.json({ ok: true })
+      }
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }) as typeof fetch
+
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      PORT: '3002',
+      ENVIRONMENT: 'test',
+      COMMIT_SHA: 'test',
+      CENTAUR_API_URL: 'http://centaur.test',
+      DISCORDBOT_API_KEY: 'centaur-key',
+      WARRUNNER_MENTION_USER_ALIASES: 'meepo=1500785594068897792'
+    } as NodeJS.ProcessEnv)
+    const client = {
+      createMessage: async (channelId: string, body: any) => {
+        posts.push({ channelId, body })
+        return { id: `posted-${posts.length}`, channel_id: channelId, content: body.content }
+      }
+    } as any
+
+    await pollFinalDeliveriesOnce(config, client)
+
+    expect(posts).toEqual([
+      {
+        channelId: 'thread-1',
+        body: {
+          content: '<@1500785594068897792>: stop tracking these as Codex failures for now.',
+          allowed_mentions: { parse: [], users: ['1500785594068897792'] }
+        }
+      }
+    ])
+  })
+
   it('does not rewrite alias-looking text inside URLs', async () => {
     const posts: Array<{ channelId: string; body: any }> = []
     globalThis.fetch = (async input => {

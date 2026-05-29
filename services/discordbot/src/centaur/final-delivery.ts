@@ -14,6 +14,7 @@ const FINAL_DELIVERY_CHUNK_CHARS = 1900
 const DISCORD_USER_ID_RE = /^\d{1,32}$/
 const DISCORD_USER_MENTION_RE = /<@!?(\d{1,32})>/g
 const ALIAS_MENTION_RE = /(^|[\s([{"'])@([A-Za-z][A-Za-z0-9_.-]{0,63})\b/g
+const LEADING_ALIAS_ADDRESS_RE = /^(\s*)([A-Za-z][A-Za-z0-9_.-]{0,63})(\s*[:,;-]\s*)/
 const NON_RETRYABLE_DISCORD_ERRORS = new Set([
   'missing_discord_delivery_target',
   'discord_forbidden',
@@ -229,12 +230,24 @@ function prepareDiscordMessage(
   const aliases = mentionUserAliases(config)
   const aliasUserIds = new Set(aliases.values())
 
-  const rewritten = content.replace(ALIAS_MENTION_RE, (full, prefix: string, alias: string) => {
-    const userId = aliases.get(normalizeMentionAlias(alias))
-    if (!userId) return full
-    allowedUsers.add(userId)
-    return `${prefix}<@${userId}>`
-  })
+  const explicitAliasesRewritten = content.replace(
+    ALIAS_MENTION_RE,
+    (full, prefix: string, alias: string) => {
+      const userId = aliases.get(normalizeMentionAlias(alias))
+      if (!userId) return full
+      allowedUsers.add(userId)
+      return `${prefix}<@${userId}>`
+    }
+  )
+  const rewritten = explicitAliasesRewritten.replace(
+    LEADING_ALIAS_ADDRESS_RE,
+    (full, prefix: string, alias: string, suffix: string) => {
+      const userId = aliases.get(normalizeMentionAlias(alias))
+      if (!userId) return full
+      allowedUsers.add(userId)
+      return `${prefix}<@${userId}>${suffix}`
+    }
+  )
 
   for (const userId of rawMentionUserIds(rewritten)) {
     if (allowedUsers.has(userId) || aliasUserIds.has(userId)) {
