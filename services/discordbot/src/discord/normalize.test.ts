@@ -64,6 +64,29 @@ describe('normalizeDiscordMessage', () => {
     expect(normalized?.history_messages?.[0]?.message_id).toBe('discord:guild-1:thread-1:prev-1')
   })
 
+  it('keeps REST-fetched history when Discord omits guild_id', () => {
+    const config = loadConfig(env())
+    const normalized = normalizeDiscordMessage({
+      message: message(),
+      config,
+      parentChannelId: 'forum-1',
+      historyMessages: [
+        message({
+          id: 'prev-1',
+          guild_id: undefined,
+          content: 'REST history row without guild id',
+          author: { id: 'user-2' }
+        })
+      ]
+    })
+
+    expect(normalized?.history_messages).toHaveLength(1)
+    expect(normalized?.history_messages?.[0]).toMatchObject({
+      message_id: 'discord:guild-1:thread-1:prev-1',
+      parts: [{ type: 'text', text: 'REST history row without guild id' }]
+    })
+  })
+
   it('accepts bot-mentioned messages in a configured home channel', () => {
     const config = loadConfig(env())
     const normalized = normalizeDiscordMessage({

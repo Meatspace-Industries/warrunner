@@ -107,7 +107,12 @@ def test_discord_workflow_extracts_repo_flag(monkeypatch) -> None:
     assert selection.parts == [
         {
             "type": "text",
-            "text": "Target GitHub repository for this turn: Meatspace-Industries/dappios.",
+            "text": (
+                "Target GitHub repository for this turn: Meatspace-Industries/dappios. "
+                "This sandbox uses a GitHub token scoped to that repository only; "
+                "do not treat `gh repo list` or failed access to a different "
+                "allowed repository as evidence that the deployment lacks access."
+            ),
         },
         {"type": "text", "text": "fix profile loading"},
     ]

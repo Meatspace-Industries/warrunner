@@ -341,7 +341,12 @@ def _with_repo_routing_note(
 ) -> list[dict[str, Any]]:
     note: str | None = None
     if repo:
-        note = f"Target GitHub repository for this turn: {repo}."
+        note = (
+            f"Target GitHub repository for this turn: {repo}. "
+            "This sandbox uses a GitHub token scoped to that repository only; "
+            "do not treat `gh repo list` or failed access to a different "
+            "allowed repository as evidence that the deployment lacks access."
+        )
     elif ambiguous_repos:
         note = (
             "Multiple configured GitHub repositories were mentioned "

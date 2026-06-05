@@ -26,7 +26,9 @@ export function normalizeDiscordMessage(opts: {
   const parentChannelId = opts.parentChannelId?.trim() || undefined
   const history = normalizeDiscordHistory(opts.historyMessages ?? [], {
     currentMessageId: message.id,
-    config: opts.config
+    config: opts.config,
+    guildId: message.guild_id,
+    channelId: message.channel_id
   })
 
   return {
@@ -50,17 +52,19 @@ export function normalizeDiscordMessage(opts: {
 
 export function normalizeDiscordHistory(
   messages: DiscordMessage[],
-  opts: { currentMessageId: string; config: AppConfig }
+  opts: { currentMessageId: string; config: AppConfig; guildId?: string; channelId?: string }
 ): DiscordHistoryMessage[] {
   const history: DiscordHistoryMessage[] = []
   for (const message of messages) {
     if (!message.id || message.id === opts.currentMessageId) continue
-    if (!message.guild_id || !message.channel_id || !message.author?.id) continue
+    const guildId = message.guild_id ?? opts.guildId
+    const channelId = message.channel_id ?? opts.channelId
+    if (!guildId || !channelId || !message.author?.id) continue
     if (message.webhook_id) continue
     const parts = partsFromDiscordMessage(message, opts.config)
     if (!parts.length) continue
     history.push({
-      message_id: `discord:${message.guild_id}:${message.channel_id}:${message.id}`,
+      message_id: `discord:${guildId}:${channelId}:${message.id}`,
       role: message.author.bot ? 'assistant' : 'user',
       parts,
       user_id: message.author.id,
