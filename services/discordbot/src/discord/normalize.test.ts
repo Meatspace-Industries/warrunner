@@ -171,19 +171,22 @@ describe('normalizeDiscordMessage', () => {
     expect(normalized?.discord.is_mention).toBe(true)
   })
 
-  it('rejects bot-mentioned messages outside configured routes when not in a thread', () => {
+  it('accepts bot-mentioned messages outside configured routes when not in a thread', () => {
     const config = loadConfig(env())
-    expect(
-      normalizeDiscordMessage({
-        message: message({
-          id: 'outside-channel-msg-1',
-          channel_id: 'random-channel',
-          content: '<@999> not from a thread',
-          mentions: [{ id: '999' }]
-        }),
-        config
-      })
-    ).toBeNull()
+    const normalized = normalizeDiscordMessage({
+      message: message({
+        id: 'outside-channel-msg-1',
+        channel_id: 'random-channel',
+        content: '<@999> not from a thread',
+        mentions: [{ id: '999' }]
+      }),
+      config
+    })
+
+    expect(normalized?.thread_key).toBe('discord:guild-1:random-channel:random-channel')
+    expect(normalized?.message_id).toBe('discord:guild-1:random-channel:outside-channel-msg-1')
+    expect(normalized?.parts[0]?.text).toBe('not from a thread')
+    expect(normalized?.discord.is_mention).toBe(true)
   })
 
   it('rejects raw mention-looking text outside configured routes without a parsed Discord mention', () => {
