@@ -205,7 +205,9 @@ def _build_claude_cmd() -> list[str]:
     ]
     if os.path.isfile("AGENTS.md"):
         cmd.extend(["--append-system-prompt-file", "AGENTS.md"])
-    model = (os.environ.get("CLAUDE_MODEL") or "opus").strip() or "opus"
+    model = (
+        os.environ.get("CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL
+    ).strip() or DEFAULT_CLAUDE_MODEL
     cmd.extend(["--model", model])
     resume = _resume_session_id()
     if resume:
