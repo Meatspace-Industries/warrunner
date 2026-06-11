@@ -2516,6 +2516,69 @@ async def _dispatch_run(pool, run_row: dict[str, Any]) -> None:
     await _run_handler(pool, run_row)
 
 
+_WORKFLOW_FAILURE_DELIVERY_TEXT = (
+    "⚠️ I hit an internal error before I could finish this one. "
+    "Please try again."
+)
+
+
+async def _enqueue_workflow_failure_delivery(
+    pool, run_id: str, error_text: str | None
+) -> None:
+    """Deliver a user-facing failure message for a failed user-facing run.
+
+    Workflow runs triggered by a user message (Discord/Slack turns) carry a
+    ``delivery`` target in their input. When such a run fails, the requester
+    must hear about it — silence is treated as a bug. Scheduled/ETL runs have
+    no delivery target and are skipped.
+    """
+    try:
+        row = await pool.fetchrow(
+            "SELECT workflow_name, input_json FROM workflow_runs WHERE run_id = $1",
+            run_id,
+        )
+        if row is None:
+            return
+        run_input = decode_jsonb(row["input_json"], {})
+        if not isinstance(run_input, dict):
+            return
+        delivery = run_input.get("delivery")
+        thread_key = str(run_input.get("thread_key") or "").strip()
+        if not isinstance(delivery, dict) or not delivery.get("platform"):
+            return
+        if not thread_key:
+            return
+        await pool.execute(
+            "INSERT INTO agent_final_delivery_outbox ("
+            "execution_id, thread_key, delivery, state, final_payload, "
+            "next_attempt_at"
+            ") VALUES ($1, $2, $3::jsonb, 'pending', $4::jsonb, NOW()) "
+            "ON CONFLICT (execution_id) DO NOTHING",
+            f"workflow:{run_id}:failed",
+            thread_key,
+            canonical_json(delivery),
+            canonical_json(
+                {
+                    "result_text": _WORKFLOW_FAILURE_DELIVERY_TEXT,
+                    "workflow_run_id": run_id,
+                    "workflow_name": str(row["workflow_name"] or ""),
+                    **({"error_text": error_text} if error_text else {}),
+                }
+            ),
+        )
+        log.info(
+            "workflow_failure_delivery_enqueued",
+            run_id=run_id,
+            thread_key=thread_key,
+        )
+    except Exception:
+        log.warning(
+            "workflow_failure_delivery_enqueue_failed",
+            run_id=run_id,
+            exc_info=True,
+        )
+
+
 async def _mark_run_failed_on_sandbox_crash(pool, run_id: str, pod_name: str) -> None:
     """If the executor pod exited Failed without writing a terminal status,
     move the row to ``failed`` so the worker stops re-leasing it.
@@ -2541,6 +2604,11 @@ async def _mark_run_failed_on_sandbox_crash(pool, run_id: str, pod_name: str) ->
         "    completed_at = NOW(), "
         "    updated_at = NOW() "
         "WHERE run_id = $1 AND status = 'running'",
+        run_id,
+        f"workflow executor pod {pod_name} exited without writing terminal status",
+    )
+    await _enqueue_workflow_failure_delivery(
+        pool,
         run_id,
         f"workflow executor pod {pod_name} exited without writing terminal status",
     )
@@ -2588,6 +2656,9 @@ async def _run_handler(pool, run_row: dict[str, Any]) -> None:
             f"unknown workflow: {workflow_name}",
         )
         if _command_updated(updated):
+            await _enqueue_workflow_failure_delivery(
+                pool, run_id, f"unknown workflow: {workflow_name}"
+            )
             await notify_workflow_run_terminal(pool, run_id)
         return
 
@@ -2783,6 +2854,7 @@ async def _run_handler(pool, run_row: dict[str, Any]) -> None:
             )
             mark_error(span, exc.message)
             record_workflow_run_terminal(workflow_name, "failed", _duration)
+            await _enqueue_workflow_failure_delivery(pool, run_id, exc.message)
             await notify_workflow_run_terminal(pool, run_id)
             log.warning(
                 "workflow_run_failed",
@@ -2830,6 +2902,7 @@ async def _run_handler(pool, run_row: dict[str, Any]) -> None:
                 },
             )
             record_workflow_run_terminal(workflow_name, "failed", _duration)
+            await _enqueue_workflow_failure_delivery(pool, run_id, str(exc)[:2000])
             await notify_workflow_run_terminal(pool, run_id)
         else:
             log.info(

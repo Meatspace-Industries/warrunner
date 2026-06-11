@@ -4118,3 +4118,161 @@ async def test_bootstrap_service_api_keys_includes_discordbot_key(db_pool, monke
     assert row["revoked_at"] is None
     assert row["created_by"] == "service-bootstrap"
     assert row["created_by"] == "service-bootstrap"
+
+
+@pytest.mark.asyncio
+async def test_reap_stuck_queued_executions_fails_unclaimed_with_user_message(db_pool):
+    from api.runtime_control import _reap_stuck_queued_executions, decode_jsonb
+
+    thread_key = f"discord:G-test:{uuid.uuid4().hex}:stuck-queued"
+    stuck_id = f"exe-stuck-{uuid.uuid4().hex[:8]}"
+    await _insert_assignment(db_pool, thread_key)
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, created_at"
+        ") VALUES ($1, $2, 1, 'exec-stuck', 'hash-stuck', 'queued', "
+        "'{\"platform\":\"discord\"}'::jsonb, '{}'::jsonb, NOW() - INTERVAL '30 minutes')",
+        stuck_id,
+        thread_key,
+    )
+
+    reaped = await _reap_stuck_queued_executions(db_pool)
+    assert reaped >= 1
+
+    row = await db_pool.fetchrow(
+        "SELECT status, terminal_reason FROM agent_execution_requests WHERE execution_id = $1",
+        stuck_id,
+    )
+    assert row is not None
+    assert row["status"] == "failed_permanent"
+    assert row["terminal_reason"] == "queued_never_claimed"
+
+    outbox = await db_pool.fetchrow(
+        "SELECT state, final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        stuck_id,
+    )
+    assert outbox is not None
+    assert outbox["state"] == "pending"
+    payload = decode_jsonb(outbox["final_payload"], {})
+    assert payload["result_text"].strip()
+    assert "try again" in payload["result_text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_reap_stuck_queued_executions_skips_blocked_and_fresh_rows(db_pool):
+    from api.runtime_control import _reap_stuck_queued_executions
+
+    blocked_thread = f"discord:G-test:{uuid.uuid4().hex}:blocked"
+    fresh_thread = f"discord:G-test:{uuid.uuid4().hex}:fresh"
+    blocked_id = f"exe-blocked-{uuid.uuid4().hex[:8]}"
+    running_id = f"exe-running-{uuid.uuid4().hex[:8]}"
+    fresh_id = f"exe-freshq-{uuid.uuid4().hex[:8]}"
+    await _insert_assignment(db_pool, blocked_thread)
+    await _insert_assignment(db_pool, fresh_thread)
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at, worker_lease_expires_at, created_at"
+        ") VALUES ($1, $2, 1, 'exec-running', 'hash-running', 'running', "
+        "'{\"platform\":\"discord\"}'::jsonb, '{}'::jsonb, NOW() + INTERVAL '30 minutes', "
+        "NOW() + INTERVAL '1 minute', NOW() - INTERVAL '5 minutes')",
+        running_id,
+        blocked_thread,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, created_at"
+        ") VALUES ($1, $2, 1, 'exec-blocked', 'hash-blocked', 'queued', "
+        "'{\"platform\":\"discord\"}'::jsonb, '{}'::jsonb, NOW() - INTERVAL '30 minutes')",
+        blocked_id,
+        blocked_thread,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, created_at"
+        ") VALUES ($1, $2, 1, 'exec-freshq', 'hash-freshq', 'queued', "
+        "'{\"platform\":\"discord\"}'::jsonb, '{}'::jsonb, NOW())",
+        fresh_id,
+        fresh_thread,
+    )
+
+    await _reap_stuck_queued_executions(db_pool)
+
+    blocked_row = await db_pool.fetchrow(
+        "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+        blocked_id,
+    )
+    assert blocked_row is not None
+    assert blocked_row["status"] == "queued"
+
+    fresh_row = await db_pool.fetchrow(
+        "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+        fresh_id,
+    )
+    assert fresh_row is not None
+    assert fresh_row["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_mark_execution_terminal_substitutes_user_facing_failure_text(db_pool):
+    from api.runtime_control import _mark_execution_terminal, decode_jsonb
+
+    thread_key = f"discord:G-test:{uuid.uuid4().hex}:failure-text"
+    failed_id = f"exe-failtext-{uuid.uuid4().hex[:8]}"
+    completed_id = f"exe-oktext-{uuid.uuid4().hex[:8]}"
+    await _insert_assignment(db_pool, thread_key)
+    for execution_id, execute_id in (
+        (failed_id, "exec-failtext"),
+        (completed_id, "exec-oktext"),
+    ):
+        await db_pool.execute(
+            "INSERT INTO agent_execution_requests ("
+            "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+            "delivery, metadata, created_at"
+            ") VALUES ($1, $2, 1, $3, $4, 'running', "
+            "'{\"platform\":\"discord\"}'::jsonb, '{}'::jsonb, NOW())",
+            execution_id,
+            thread_key,
+            execute_id,
+            f"hash-{execute_id}",
+        )
+
+    await _mark_execution_terminal(
+        db_pool,
+        execution_id=failed_id,
+        thread_key=thread_key,
+        status="failed_permanent",
+        terminal_reason="silence_deadline_exceeded",
+        result_text="",
+        error_text="execution made no progress before silence deadline",
+    )
+    failed_outbox = await db_pool.fetchrow(
+        "SELECT final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        failed_id,
+    )
+    assert failed_outbox is not None
+    failed_payload = decode_jsonb(failed_outbox["final_payload"], {})
+    assert "stopped responding" in failed_payload["result_text"]
+    assert failed_payload["error_text"] == (
+        "execution made no progress before silence deadline"
+    )
+
+    await _mark_execution_terminal(
+        db_pool,
+        execution_id=completed_id,
+        thread_key=thread_key,
+        status="completed",
+        terminal_reason="completed",
+        result_text="all done",
+        error_text=None,
+    )
+    completed_outbox = await db_pool.fetchrow(
+        "SELECT final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        completed_id,
+    )
+    assert completed_outbox is not None
+    completed_payload = decode_jsonb(completed_outbox["final_payload"], {})
+    assert completed_payload["result_text"] == "all done"

@@ -952,16 +952,17 @@ async def get_or_spawn(
                     _get_runtime(session.sandbox_id)
                     return session
                 except Exception as exc:
+                    # Resume is an optimization, not a requirement: the thread
+                    # transcript lives in Postgres, so fall through to the
+                    # gone-container path below and spawn a fresh sandbox
+                    # instead of failing the whole turn.
                     log.warning(
-                        "suspended_session_resume_failed",
+                        "suspended_session_resume_failed_spawning_fresh",
                         thread_key=thread_key,
                         sandbox=session.sandbox_id[:12],
                         error=str(exc),
                         exc_info=True,
                     )
-                    raise RuntimeError(
-                        f"failed to resume suspended sandbox: {session.sandbox_id}"
-                    ) from exc
             # Container is gone — save agent_thread_id and cursor for resume, clean up row
             if not repo_scope_changed:
                 old_agent_thread_id = session.agent_thread_id
@@ -1933,6 +1934,16 @@ async def reconcile_tick() -> None:
     try:
         pool = _get_pool()
         backend = get_backend()
+
+        # Execution-health watchdog: runs here (not just in the worker loops)
+        # so stuck or never-claimed executions are failed and surfaced to the
+        # requester even when every execution worker is wedged.
+        try:
+            from api.runtime_control import reconcile_execution_health
+
+            await reconcile_execution_health(pool)
+        except Exception:
+            log.warning("reconcile_execution_health_failed", exc_info=True)
 
         async def _mark_inactive(thread_key: str) -> None:
             try:

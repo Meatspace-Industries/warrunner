@@ -93,10 +93,50 @@ EXECUTION_STREAM_EOF_RETRY_DELAY_S = max(
 EXECUTION_STALE_RECOVERY_INTERVAL_S = float(
     os.getenv("EXECUTION_STALE_RECOVERY_INTERVAL_S", "5.0")
 )
+# How long a claimable execution may sit in 'queued' (with no active sibling
+# execution on its thread) before we conclude the workers will never pick it
+# up, fail it, and tell the user — instead of leaving them in silence.
+EXECUTION_QUEUED_CLAIM_TIMEOUT_S = max(
+    float(os.getenv("EXECUTION_QUEUED_CLAIM_TIMEOUT_S", "600.0")),
+    60.0,
+)
 _RECONCILE_STARTUP_LIMIT = max(
     int(os.getenv("EXECUTION_RECONCILE_STARTUP_LIMIT", "500")),
     1,
 )
+
+# User-facing text delivered when an execution fails without producing any
+# result text. Every terminal failure must say *something* to the requester;
+# silence is treated as a bug.
+_FAILURE_DELIVERY_TEXT_DEFAULT = (
+    "⚠️ Something went wrong on my end and this request didn't finish. "
+    "Please try again."
+)
+_FAILURE_DELIVERY_TEXT_BY_REASON = {
+    "hard_deadline_exceeded": (
+        "⚠️ I ran out of time on this one and had to stop. Please try again."
+    ),
+    "hard_deadline_reaped": (
+        "⚠️ This request got stuck and was cleaned up without finishing. "
+        "Please try again."
+    ),
+    "silence_deadline_exceeded": (
+        "⚠️ My runtime stopped responding partway through, so I gave up on "
+        "this one. Please try again."
+    ),
+    "queued_never_claimed": (
+        "⚠️ I never managed to start working on this — my execution queue "
+        "looks stuck. Please try again, and flag this if it keeps happening."
+    ),
+}
+
+
+def _failure_delivery_text(status: str, terminal_reason: str) -> str | None:
+    if status != "failed_permanent":
+        return None
+    return _FAILURE_DELIVERY_TEXT_BY_REASON.get(
+        terminal_reason, _FAILURE_DELIVERY_TEXT_DEFAULT
+    )
 EXECUTION_WORKER_CONCURRENCY = max(
     int(os.getenv("EXECUTION_WORKER_CONCURRENCY", "128")),
     1,
@@ -2264,6 +2304,12 @@ async def _mark_execution_terminal(
             )
         return
 
+    delivery_result_text = result_text
+    if not result_text.strip():
+        failure_text = _failure_delivery_text(status, terminal_reason)
+        if failure_text:
+            delivery_result_text = failure_text
+
     with start_span(
         "centaur.final_delivery.ready",
         attributes={
@@ -2303,7 +2349,7 @@ async def _mark_execution_terminal(
                         harness=harness,
                     ),
                     "session_header": session_header,
-                    "result_text": result_text,
+                    "result_text": delivery_result_text,
                     **({"error_text": error_text} if error_text else {}),
                     **(
                         {"slackbot_streamed_answer_chars": slackbot_streamed_answer_chars}
@@ -3704,6 +3750,11 @@ async def _reconcile_orphaned_executions(pool, *, limit: int = 0) -> int:
                 result_text="",
                 error_text="execution outlived hard deadline without finalizing",
             )
+            await _stop_execution_session(
+                thread_key,
+                reason="hard_deadline_reaped",
+            )
+            record_execution_watchdog_timeout("unknown", "hard_deadline_reaped")
             reconciled += 1
         except Exception:
             log.warning(
@@ -3715,6 +3766,89 @@ async def _reconcile_orphaned_executions(pool, *, limit: int = 0) -> int:
     if reconciled:
         log.warning("hard_deadline_reaped", reconciled=reconciled)
     return reconciled
+
+
+async def _reap_stuck_queued_executions(pool, *, limit: int = 50) -> int:
+    """Fail queued executions that nothing will ever claim.
+
+    A queued execution with no active sibling execution on its thread should
+    be claimed by a worker within seconds. If it has been claimable for longer
+    than EXECUTION_QUEUED_CLAIM_TIMEOUT_S, the workers are dead or wedged;
+    fail it with a user-facing message instead of leaving the requester in
+    silence.
+    """
+    rows = await pool.fetch(
+        "SELECT er.execution_id, er.thread_key, ara.harness "
+        "FROM agent_execution_requests er "
+        "LEFT JOIN agent_runtime_assignments ara "
+        "  ON ara.thread_key = er.thread_key "
+        "  AND ara.assignment_generation = er.assignment_generation "
+        "WHERE er.status = 'queued' "
+        "AND er.created_at < NOW() - make_interval(secs => $1::double precision) "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM agent_execution_requests active "
+        "  WHERE active.thread_key = er.thread_key "
+        "  AND active.execution_id <> er.execution_id "
+        "  AND ("
+        "    active.status IN ('running', 'retry_wait') "
+        "    OR ("
+        "      active.status = 'cancel_requested' "
+        "      AND active.worker_lease_expires_at > NOW()"
+        "    )"
+        "  )"
+        ") "
+        "ORDER BY er.created_at ASC "
+        "LIMIT $2",
+        float(EXECUTION_QUEUED_CLAIM_TIMEOUT_S),
+        limit,
+    )
+    reaped = 0
+    for row in rows:
+        execution_id = str(row["execution_id"])
+        thread_key = str(row["thread_key"])
+        harness = str(row["harness"] or "unknown")
+        try:
+            await _mark_execution_terminal(
+                pool,
+                execution_id=execution_id,
+                thread_key=thread_key,
+                status="failed_permanent",
+                terminal_reason="queued_never_claimed",
+                result_text="",
+                error_text=(
+                    "execution stayed queued past the claim timeout; "
+                    "execution workers are not claiming work"
+                ),
+            )
+            record_execution_watchdog_timeout(harness, "queued_never_claimed")
+            reaped += 1
+            log.error(
+                "execution_queued_never_claimed",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                harness=harness,
+                queued_claim_timeout_s=EXECUTION_QUEUED_CLAIM_TIMEOUT_S,
+            )
+        except Exception:
+            log.warning(
+                "queued_never_claimed_reap_failed",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                exc_info=True,
+            )
+    return reaped
+
+
+async def reconcile_execution_health(pool) -> None:
+    """Watchdog pass over execution state, independent of the worker loops.
+
+    Runs from the app-level reconcile loop so stuck executions are detected
+    and surfaced to users even when every execution worker is wedged or the
+    workers never started.
+    """
+    await _recover_stale_running(pool)
+    await _reconcile_orphaned_executions(pool, limit=_RECONCILE_STARTUP_LIMIT)
+    await _reap_stuck_queued_executions(pool)
 
 
 async def _execution_worker_loop(pool) -> None:
@@ -3751,6 +3885,11 @@ async def start_execution_worker(pool) -> None:
         )
         for index in range(EXECUTION_WORKER_CONCURRENCY)
     ]
+    log.info(
+        "execution_workers_started",
+        concurrency=EXECUTION_WORKER_CONCURRENCY,
+        reserved_user_slots=EXECUTION_RESERVED_USER_SLOTS,
+    )
 
 
 async def stop_execution_worker() -> None:
