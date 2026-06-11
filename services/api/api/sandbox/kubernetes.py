@@ -718,6 +718,11 @@ def _build_tool_server_container(
             "value": _tool_server_tool_dirs(overlay_mount=overlay_mount),
         },
         {"name": "PLUGIN_WATCHER_ENABLED", "value": "0"},
+        # The sidecar's DB pool goes through iron-proxy, whose SQL policy
+        # forbids multi-statement queries; asyncpg's default pool reset is a
+        # multi-statement batch, so pooled queries fail after the first
+        # connection release without the no-op reset.
+        {"name": "ASYNCPG_POOL_RESET_MODE", "value": "noop"},
     ]
     if database_url:
         env.insert(0, {"name": "DATABASE_URL", "value": database_url})
