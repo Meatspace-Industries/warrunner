@@ -29,6 +29,10 @@ api:
     KUBERNETES_WORKFLOW_RUN_SECRET_ENV_KEYS: DISCORD_BOT_TOKEN,GITHUB_APP_ID,GITHUB_APP_INSTALLATION_ID,GITHUB_APP_PRIVATE_KEY
     WARRUNNER_ALLOWED_GITHUB_REPOS: Meatspace-Industries/dappios,Meatspace-Industries/dapp-backend,Meatspace-Industries/dappweb
     WARRUNNER_GITHUB_REPO_ALIASES: dappios=Meatspace-Industries/dappios,dapp-ios=Meatspace-Industries/dappios,ios=Meatspace-Industries/dappios,dapp-backend=Meatspace-Industries/dapp-backend,backend=Meatspace-Industries/dapp-backend,dappweb=Meatspace-Industries/dappweb,dapp-web=Meatspace-Industries/dappweb,web=Meatspace-Industries/dappweb
+    # Company-brain features: GitHub PR/issue ETL into company context
+    # documents, and the daily brief posted to the Warrunner home channel.
+    GITHUB_ETL_ENABLED: "1"
+    WARRUNNER_DAILY_BRIEF_CHANNEL_ID: "1508220472569888950"
 
 ironProxy:
   secretSource: env
