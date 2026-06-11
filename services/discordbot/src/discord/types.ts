@@ -63,6 +63,11 @@ export type DiscordChannel = {
   thread_metadata?: Record<string, unknown>
 }
 
+export type DiscordRole = {
+  id: string
+  name: string
+}
+
 export type DiscordGatewayPayload = {
   op: number
   d?: unknown
@@ -83,6 +88,14 @@ export type DiscordHistoryMessage = {
   metadata?: Record<string, unknown>
 }
 
+export type NormalizedRequester = {
+  user_id: string
+  username?: string
+  display_name?: string
+  role_ids?: string[]
+  role_names?: string[]
+}
+
 export type NormalizedDiscordEvent = {
   thread_key: string
   message_id: string
@@ -92,6 +105,7 @@ export type NormalizedDiscordEvent = {
   user_id: string
   parts: NormalizedPart[]
   history_messages?: DiscordHistoryMessage[]
+  requester?: NormalizedRequester
   discord: {
     message_id: string
     channel_id: string

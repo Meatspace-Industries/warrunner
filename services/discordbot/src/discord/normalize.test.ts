@@ -281,3 +281,45 @@ describe('normalizeDiscordMessage', () => {
     ).toBe('user-1')
   })
 })
+
+describe('requester context', () => {
+  it('attaches requester identity and resolved role names', () => {
+    const config = loadConfig(env())
+    const normalized = normalizeDiscordMessage({
+      message: message({
+        author: { id: 'user-1', username: 'alice', global_name: 'Alice A' },
+        member: { roles: ['role-1', 'role-2'], nick: 'Ally' }
+      }),
+      config,
+      parentChannelId: 'forum-1',
+      roleNamesById: new Map([
+        ['role-1', 'eng'],
+        ['role-2', 'leadership']
+      ])
+    })
+    expect(normalized?.requester).toEqual({
+      user_id: 'user-1',
+      username: 'alice',
+      display_name: 'Ally',
+      role_ids: ['role-1', 'role-2'],
+      role_names: ['eng', 'leadership']
+    })
+  })
+
+  it('omits role names when no role map is provided', () => {
+    const config = loadConfig(env())
+    const normalized = normalizeDiscordMessage({
+      message: message({
+        author: { id: 'user-1', username: 'alice' }
+      }),
+      config,
+      parentChannelId: 'forum-1'
+    })
+    expect(normalized?.requester).toEqual({
+      user_id: 'user-1',
+      username: 'alice',
+      display_name: 'alice',
+      role_ids: ['role-1']
+    })
+  })
+})

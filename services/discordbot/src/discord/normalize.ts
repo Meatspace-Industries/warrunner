@@ -3,7 +3,8 @@ import type {
   DiscordHistoryMessage,
   DiscordMessage,
   NormalizedDiscordEvent,
-  NormalizedPart
+  NormalizedPart,
+  NormalizedRequester
 } from './types'
 
 export function normalizeDiscordMessage(opts: {
@@ -11,6 +12,7 @@ export function normalizeDiscordMessage(opts: {
   config: AppConfig
   parentChannelId?: string
   historyMessages?: DiscordMessage[]
+  roleNamesById?: Map<string, string>
 }): NormalizedDiscordEvent | null {
   const message = opts.message
   if (!message.id || !message.channel_id || !message.guild_id) return null
@@ -31,6 +33,8 @@ export function normalizeDiscordMessage(opts: {
     channelId: message.channel_id
   })
 
+  const requester = requesterFromMessage(message, opts.roleNamesById)
+
   return {
     thread_key: `discord:${message.guild_id}:${parentChannelId ?? message.channel_id}:${message.channel_id}`,
     message_id: `discord:${message.guild_id}:${message.channel_id}:${message.id}`,
@@ -40,6 +44,7 @@ export function normalizeDiscordMessage(opts: {
     user_id: message.author.id,
     parts,
     ...(history.length ? { history_messages: history } : {}),
+    ...(requester ? { requester } : {}),
     discord: {
       message_id: message.id,
       channel_id: message.channel_id,
@@ -99,6 +104,32 @@ function isAllowedRoute(
   }
   if (intakeIds.has(channelId)) return true
   return false
+}
+
+function requesterFromMessage(
+  message: DiscordMessage,
+  roleNamesById?: Map<string, string>
+): NormalizedRequester | null {
+  const author = message.author
+  if (!author?.id) return null
+  const roleIds = (message.member?.roles ?? []).filter(Boolean)
+  const roleNames = roleNamesById
+    ? roleIds
+        .map(roleId => roleNamesById.get(roleId))
+        .filter((name): name is string => Boolean(name))
+    : []
+  const displayName =
+    message.member?.nick?.trim() ||
+    author.global_name?.trim() ||
+    author.username?.trim() ||
+    undefined
+  return {
+    user_id: author.id,
+    ...(author.username ? { username: author.username } : {}),
+    ...(displayName ? { display_name: displayName } : {}),
+    ...(roleIds.length ? { role_ids: roleIds } : {}),
+    ...(roleNames.length ? { role_names: roleNames } : {})
+  }
 }
 
 function isAllowedMember(config: AppConfig, memberRoleIds: string[]): boolean {

@@ -454,3 +454,29 @@ async def test_discord_workflow_releases_assignment_when_repo_is_selected(
     )
     pool.execute.assert_awaited_once()
     assert do_agent_turn.await_args.kwargs["repo"] == "Meatspace-Industries/dappios"
+
+
+def test_discord_workflow_builds_requester_note() -> None:
+    workflow = _load_warrunner_discord_workflow()
+
+    note = workflow._requester_note(
+        {
+            "requester": {
+                "user_id": "user-1",
+                "username": "alice",
+                "display_name": "Ally",
+                "role_ids": ["1", "2"],
+                "role_names": ["eng", "leadership"],
+            }
+        }
+    )
+    assert note is not None
+    assert note["type"] == "text"
+    assert "Ally" in note["text"]
+    assert "eng, leadership" in note["text"]
+
+    bare = workflow._requester_note({"requester": {"user_id": "user-1"}})
+    assert bare is None
+
+    assert workflow._requester_note({}) is None
+    assert workflow._requester_note(None) is None

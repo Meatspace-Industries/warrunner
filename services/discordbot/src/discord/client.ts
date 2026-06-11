@@ -1,5 +1,11 @@
 import { discordBotToken, type AppConfig } from '../config'
-import type { DiscordChannel, DiscordCreateMessageBody, DiscordMessage, DiscordUser } from './types'
+import type {
+  DiscordChannel,
+  DiscordCreateMessageBody,
+  DiscordMessage,
+  DiscordRole,
+  DiscordUser
+} from './types'
 
 export class DiscordApiError extends Error {
   readonly status: number
@@ -49,6 +55,13 @@ export class DiscordClient {
       `/channels/${encodeURIComponent(opts.channelId)}/messages?${params}`
     )
     return Array.isArray(messages) ? messages.reverse() : []
+  }
+
+  async fetchGuildRoles(guildId: string): Promise<DiscordRole[]> {
+    const roles = await this.request<DiscordRole[]>(
+      `/guilds/${encodeURIComponent(guildId)}/roles`
+    )
+    return Array.isArray(roles) ? roles : []
   }
 
   async createMessage(channelId: string, body: DiscordCreateMessageBody): Promise<DiscordMessage> {

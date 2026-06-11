@@ -10,6 +10,8 @@ export type DiscordHandoff = {
   emit(event: NormalizedDiscordEvent): Promise<CentaurHandoffResult>
 }
 
+const GUILD_ROLES_CACHE_TTL_MS = 10 * 60 * 1000
+
 export function createDiscordMessageProcessor(opts: {
   config: AppConfig
   discord: DiscordClient
@@ -17,6 +19,28 @@ export function createDiscordMessageProcessor(opts: {
   handoff: DiscordHandoff
   typing?: DiscordTypingIndicator
 }): (message: DiscordMessage) => Promise<void> {
+  const guildRolesCache = new Map<
+    string,
+    { fetchedAt: number; roleNamesById: Map<string, string> }
+  >()
+
+  async function roleNamesFor(guildId: string | undefined): Promise<Map<string, string>> {
+    if (!guildId) return new Map()
+    const cached = guildRolesCache.get(guildId)
+    if (cached && Date.now() - cached.fetchedAt < GUILD_ROLES_CACHE_TTL_MS) {
+      return cached.roleNamesById
+    }
+    try {
+      const roles = await opts.discord.fetchGuildRoles(guildId)
+      const roleNamesById = new Map(roles.map(role => [role.id, role.name]))
+      guildRolesCache.set(guildId, { fetchedAt: Date.now(), roleNamesById })
+      return roleNamesById
+    } catch (error) {
+      logWarn('discord_guild_roles_fetch_failed', { guild_id: guildId, error })
+      return cached?.roleNamesById ?? new Map()
+    }
+  }
+
   return async function processDiscordMessage(message: DiscordMessage): Promise<void> {
     const parentChannelId = await parentChannelIdFor(opts.channels, message)
     const shallow = normalizeDiscordMessage({
@@ -44,11 +68,13 @@ export function createDiscordMessageProcessor(opts: {
               return []
             })
         : []
+    const roleNamesById = await roleNamesFor(message.guild_id)
     const normalized = normalizeDiscordMessage({
       message,
       config: opts.config,
       parentChannelId,
-      historyMessages
+      historyMessages,
+      roleNamesById
     })
     if (!normalized) {
       opts.typing?.stop({

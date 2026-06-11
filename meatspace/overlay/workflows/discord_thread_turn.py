@@ -262,6 +262,31 @@ def _discord_delivery(delivery: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
+def _requester_note(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    requester = (metadata or {}).get("requester")
+    if not isinstance(requester, dict):
+        return None
+    display_name = str(
+        requester.get("display_name") or requester.get("username") or ""
+    ).strip()
+    if not display_name:
+        return None
+    role_names = [
+        str(name).strip()
+        for name in requester.get("role_names") or []
+        if str(name).strip()
+    ]
+    roles_clause = f" (Discord roles: {', '.join(role_names)})" if role_names else ""
+    return {
+        "type": "text",
+        "text": (
+            f"Requester: {display_name}{roles_clause}. "
+            "Tailor the relevance, framing, and level of detail of your "
+            "answer to who is asking."
+        ),
+    }
+
+
 def _known_personas() -> set[str]:
     try:
         from api.app import get_tool_manager
@@ -613,10 +638,15 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         repo=selection.repo,
     )
 
+    requester_note = _requester_note(metadata)
+    turn_parts = (
+        [requester_note, *selection.parts] if requester_note else selection.parts
+    )
+
     return await do_agent_turn(
         ctx,
         thread_key=thread_key,
-        parts=selection.parts,
+        parts=turn_parts,
         history_messages=inp.history_messages,
         message_id=inp.message_id,
         user_id=inp.user_id,
