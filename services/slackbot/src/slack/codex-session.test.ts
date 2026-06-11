@@ -747,7 +747,9 @@ describe('CodexSessionRenderer', () => {
     )
     expect(firstTaskIndex).toBeGreaterThanOrEqual(0)
     expect(contextBlockIndex).toBe(-1)
-    expect(firstTextIndex).toBeGreaterThan(firstTaskIndex)
+    // The answer is delivered once at finalize (not streamed incrementally), so the activity task
+    // has streamed but no answer text has streamed yet before the terminal event.
+    expect(firstTextIndex).toBe(-1)
     expect(thinkingBlockText(calls)).toBe('')
 
     await renderer.event(sessionId, { type: 'turn.completed', result: 'Done.' })
@@ -1515,6 +1517,49 @@ describe('CodexSessionRenderer', () => {
     expect(countOccurrences(visible, 'Hello.')).toBe(1)
   })
 
+  it('streams claude-code delta assistant text and ignores the canonical duplicate', async () => {
+    const calls: Array<{ method: string; params: any }> = []
+    const client = makeFakeSlackClient(calls)
+    const { sessionId } = await new AgentSessionRenderer(client as any).open({
+      channel: 'C123',
+      parentTs: '1778866921.505479',
+      recipientTeamId: 'T123',
+      recipientUserId: 'U123',
+      title: 'Centaur execution'
+    })
+    const renderer = new CodexSessionRenderer(client as any)
+    const finalText = "I'm centaur, Tempo's AI assistant. I help with engineering and ops."
+
+    await renderer.event(sessionId, {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: "I'm" }] }
+    })
+    await renderer.event(sessionId, {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: " centaur, Tempo's AI assistant." }] }
+    })
+    await renderer.event(sessionId, {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: ' I help with engineering and ops.' }] }
+    })
+    await renderer.event(sessionId, {
+      type: 'assistant',
+      uuid: 'msg-uuid',
+      request_id: 'req-123',
+      session_id: 'claude-session',
+      message: {
+        id: 'msg_123',
+        model: 'claude-opus-4-8',
+        content: [{ type: 'text', text: finalText }]
+      }
+    })
+    await renderer.event(sessionId, { type: 'result', result: finalText })
+
+    const visible = visibleMarkdown(calls)
+    expect(countOccurrences(visible, finalText)).toBe(1)
+    expect(visible).not.toContain("I'm\n centaur")
+  })
+
   it('does not log a canonical correction for plain delta streams without item.completed', async () => {
     const logCalls: unknown[][] = []
     const originalLog = console.log
@@ -1930,3 +1975,58 @@ function makeFakeSlackClient(
     }
   }
 }
+
+describe('CodexSessionRenderer answer delivered once at finalize', () => {
+  it('does not stream provisional answer deltas and delivers the canonical answer intact when it diverges', async () => {
+    // Regression for "drops the first ~150 chars and back-fills with a duplicated later slice":
+    // previously provisional answer deltas were streamed live, then at finalize the answer was
+    // sliced at the stale streamedAnswerText offset into a reorganized canonical answer — dropping
+    // the real opening and leaving the already-streamed provisional (a later slice) at the top.
+    // Option B delivers the answer only at finalize from the canonical text, so a divergent
+    // recompose cannot drop or duplicate anything.
+    const calls: Array<{ method: string; params: any }> = []
+    const client = makeFakeSlackClient(calls)
+    const { sessionId } = await new AgentSessionRenderer(client as any).open({
+      channel: 'C123',
+      parentTs: '1778866921.505479',
+      recipientTeamId: 'T123',
+      recipientUserId: 'U123',
+      title: 'Centaur execution'
+    })
+    const renderer = new CodexSessionRenderer(client as any)
+
+    const PROVISIONAL = 'PROVISIONAL first draft.'
+    // Canonical reorganizes: a different real opening, with the provisional text now appearing later.
+    const CANONICAL = 'REAL opening line. PROVISIONAL first draft. Plus more.'
+
+    await renderer.event(sessionId, {
+      type: 'item.started',
+      item: { id: 'msg-1', type: 'agentMessage', phase: 'final_answer' }
+    })
+    await renderer.event(sessionId, {
+      type: 'item.agentMessage.delta',
+      itemId: 'msg-1',
+      delta: PROVISIONAL
+    })
+    // A command task makes hasPlan true — under the old behavior the provisional answer would
+    // stream live now; with option B it must not.
+    await renderer.event(sessionId, {
+      type: 'item.started',
+      item: { id: 'cmd-1', type: 'commandExecution', command: 'call demo ping' }
+    })
+    expect(visibleMarkdown(calls)).not.toContain('PROVISIONAL first draft.')
+
+    // Codex finalizes with a reorganized canonical answer, then the turn completes.
+    await renderer.event(sessionId, {
+      type: 'item.completed',
+      item: { id: 'msg-1', type: 'agentMessage', phase: 'final_answer', text: CANONICAL }
+    })
+    await renderer.event(sessionId, { type: 'turn.completed', result: CANONICAL })
+
+    const delivered = visibleMarkdown(calls)
+    // Full canonical answer is delivered contiguously (real opening not dropped)...
+    expect(delivered).toContain(CANONICAL)
+    // ...and the later slice that was streamed provisionally is not duplicated at the top.
+    expect(countOccurrences(delivered, 'PROVISIONAL first draft.')).toBe(1)
+  })
+})

@@ -4,12 +4,15 @@ import pytest
 import yaml
 
 from api.proxy_config import (
+    CENTAUR_CORE_PG_LISTENER,
     PG_LISTEN_PORT_BASE,
     assign_pg_listen_ports,
+    core_pg_listen_port,
     render_proxy_yaml,
 )
 from api.tool_manager import (
     DEFAULT_MATCH_HEADERS,
+    AwsAuthSecret,
     GcpAuthSecret,
     HmacHeader,
     HmacSignSecret,
@@ -790,6 +793,57 @@ def test_pg_listen_ports_are_sequential_and_sorted_by_name() -> None:
         "MIKE": PG_LISTEN_PORT_BASE + 1,
         "ZEBRA": PG_LISTEN_PORT_BASE + 2,
     }
+
+
+def test_core_pg_listen_port_is_after_tool_listeners() -> None:
+    ports = {"ALPHA": PG_LISTEN_PORT_BASE, "ZEBRA": PG_LISTEN_PORT_BASE + 1}
+    assert core_pg_listen_port(ports) == PG_LISTEN_PORT_BASE + 2
+    assert core_pg_listen_port({}) == PG_LISTEN_PORT_BASE
+
+
+def test_render_core_listener_uses_forced_env_upstream() -> None:
+    # No tool pg_dsn secrets; core listener still rendered when core_pg given.
+    core_pg = {
+        "port": PG_LISTEN_PORT_BASE,
+        "dsn_env_var": "CENTAUR_DATABASE_URL",
+        "password_env": "PG_PROXY_PASSWORD_CENTAUR_CORE",
+    }
+    cfg = yaml.safe_load(render_proxy_yaml([], core_pg=core_pg))
+    listeners = cfg["postgres"]
+    assert len(listeners) == 1
+    core = listeners[0]
+    assert core["name"] == CENTAUR_CORE_PG_LISTENER
+    assert core["listen"] == f"0.0.0.0:{PG_LISTEN_PORT_BASE}"
+    # forced env source (not 1Password) since the proxy always has the DSN env
+    assert core["upstream"]["dsn"] == {"type": "env", "var": "CENTAUR_DATABASE_URL"}
+    assert core["client"] == {
+        "user": "app_user",
+        "password_env": "PG_PROXY_PASSWORD_CENTAUR_CORE",
+    }
+
+
+def test_render_core_listener_appended_after_tool_listeners() -> None:
+    secrets = [PgDsnSecret("TOOLDB", "TOOLDB", "tooldb")]
+    pg_listen_ports = assign_pg_listen_ports(secrets)
+    core_pg = {
+        "port": core_pg_listen_port(pg_listen_ports),
+        "dsn_env_var": "CENTAUR_DATABASE_URL",
+        "password_env": "PG_PROXY_PASSWORD_CENTAUR_CORE",
+    }
+    cfg = yaml.safe_load(
+        render_proxy_yaml(secrets, pg_listen_ports=pg_listen_ports, core_pg=core_pg)
+    )
+    names = [listener["name"] for listener in cfg["postgres"]]
+    assert names == ["tooldb", CENTAUR_CORE_PG_LISTENER]
+    # core port does not collide with the tool listener's port
+    ports = {listener["name"]: listener["listen"] for listener in cfg["postgres"]}
+    assert ports["tooldb"] == f"0.0.0.0:{PG_LISTEN_PORT_BASE}"
+    assert ports[CENTAUR_CORE_PG_LISTENER] == f"0.0.0.0:{PG_LISTEN_PORT_BASE + 1}"
+
+
+def test_render_without_core_pg_emits_no_core_listener() -> None:
+    cfg = yaml.safe_load(render_proxy_yaml([]))
+    assert "postgres" not in cfg
 
 
 def test_pg_listen_ports_deduplicates() -> None:
@@ -1764,4 +1818,101 @@ def test_render_brokered_token_merges_hosts_across_duplicate_names(
     assert {r["host"] for r in entries[0]["rules"]} == {
         "api.anthropic.com",
         "console.anthropic.com",
+    }
+
+
+# ── aws_auth parser ──────────────────────────────────────────────────────────
+
+
+def _aws_entry(**overrides):
+    entry = {
+        "type": "aws_auth",
+        "name": "cloudwatch",
+        "access_key_id": "AWS_ACCESS_KEY_ID",
+        "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+        "hosts": ["logs.*.amazonaws.com", "monitoring.*.amazonaws.com"],
+        "allowed_services": ["logs", "monitoring"],
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_parser_typed_aws_auth_full_example() -> None:
+    secret = _parse_secret(_aws_entry())
+    assert isinstance(secret, AwsAuthSecret)
+    assert secret.access_key_id_ref == "AWS_ACCESS_KEY_ID"
+    assert secret.secret_access_key_ref == "AWS_SECRET_ACCESS_KEY"
+    assert secret.session_token_ref is None
+    assert secret.hosts == ("logs.*.amazonaws.com", "monitoring.*.amazonaws.com")
+    assert secret.allowed_services == ("logs", "monitoring")
+    assert secret.allowed_regions == ()
+
+
+def test_parser_aws_auth_accepts_session_token_and_regions() -> None:
+    secret = _parse_secret(
+        _aws_entry(session_token="AWS_SESSION_TOKEN", allowed_regions=["us-east-1"])
+    )
+    assert isinstance(secret, AwsAuthSecret)
+    assert secret.session_token_ref == "AWS_SESSION_TOKEN"
+    assert secret.allowed_regions == ("us-east-1",)
+
+
+def test_parser_aws_auth_requires_access_key_id() -> None:
+    entry = _aws_entry()
+    del entry["access_key_id"]
+    with pytest.raises(ValueError, match="requires a non-empty 'access_key_id'"):
+        _parse_secret(entry)
+
+
+def test_parser_aws_auth_requires_secret_access_key() -> None:
+    entry = _aws_entry()
+    del entry["secret_access_key"]
+    with pytest.raises(ValueError, match="requires a non-empty 'secret_access_key'"):
+        _parse_secret(entry)
+
+
+def test_parser_aws_auth_requires_hosts() -> None:
+    with pytest.raises(ValueError, match="'hosts' must be a non-empty array"):
+        _parse_secret(_aws_entry(hosts=[]))
+
+
+# ── aws_auth renderer ────────────────────────────────────────────────────────
+
+
+def test_render_emits_aws_auth_transform() -> None:
+    secrets = [
+        AwsAuthSecret(
+            name="cloudwatch",
+            hosts=("logs.*.amazonaws.com", "monitoring.*.amazonaws.com"),
+            access_key_id_ref="AWS_ACCESS_KEY_ID",
+            secret_access_key_ref="AWS_SECRET_ACCESS_KEY",
+            allowed_services=("logs", "monitoring"),
+        )
+    ]
+    cfg = yaml.safe_load(render_proxy_yaml(secrets))
+    aws = next(t for t in cfg["transforms"] if t["name"] == "aws_auth")
+    assert aws["config"]["access_key_id"] == {"type": "env", "var": "AWS_ACCESS_KEY_ID"}
+    assert aws["config"]["secret_access_key"] == {
+        "type": "env",
+        "var": "AWS_SECRET_ACCESS_KEY",
+    }
+    assert aws["config"]["allowed_services"] == ["logs", "monitoring"]
+    assert "session_token" not in aws["config"]
+    assert {r["host"] for r in aws["config"]["rules"]} == {
+        "logs.*.amazonaws.com",
+        "monitoring.*.amazonaws.com",
+    }
+
+
+def test_render_merges_aws_auth_hosts_for_shared_credentials() -> None:
+    secrets = [
+        AwsAuthSecret("a", ("logs.*.amazonaws.com",), "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+        AwsAuthSecret("b", ("monitoring.*.amazonaws.com",), "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+    ]
+    cfg = yaml.safe_load(render_proxy_yaml(secrets))
+    blocks = [t for t in cfg["transforms"] if t["name"] == "aws_auth"]
+    assert len(blocks) == 1
+    assert {r["host"] for r in blocks[0]["config"]["rules"]} == {
+        "logs.*.amazonaws.com",
+        "monitoring.*.amazonaws.com",
     }

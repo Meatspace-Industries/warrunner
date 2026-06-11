@@ -304,6 +304,14 @@ export class CodexSessionRenderer {
     if (!canStream) return
 
     if (state.commentaryText.length > state.streamedCommentaryText.length) return
+    // Deliver the assistant answer ONCE, at turn finalize (opts.force) — never stream it
+    // incrementally. Streaming provisional answer deltas into Slack's append-only stream is
+    // unsafe: recompose can reorder or reformat already-streamed content, and the stale slice
+    // offset (streamedAnswerText.length) then drops the real opening and back-fills with a
+    // duplicated later slice. At finalize streamedAnswerText is still empty, so `delta` below is
+    // the whole canonical answer, streamed once from its final text — no divergence is possible.
+    // (Activity/plan/thinking still stream live via publishActivitySummary.)
+    if (!opts.force) return
     if (state.answerText.length <= state.streamedAnswerText.length) return
     const delta = state.answerText.slice(state.streamedAnswerText.length)
     if (!delta) return
@@ -556,16 +564,18 @@ function applyAgentMessageUpdate(
   }
 
   if (event?.type === 'assistant') {
-    const cumulative = assistantTextFromAssistantEvent(event)
-    if (!cumulative) return { bufferChanged: false }
+    const text = assistantTextFromAssistantEvent(event)
+    if (!text) return { bufferChanged: false }
     const key = buffer === 'answer' ? 'harnessAnswerText' : 'harnessCommentaryText'
     const before = state[key]
-    if (cumulative === before || before.endsWith(cumulative)) return { bufferChanged: false }
-    state[key] = cumulative.startsWith(before)
-      ? cumulative
-      : before
-        ? `${before}\n${cumulative}`
-        : cumulative
+    if (text === before || before.endsWith(text)) return { bufferChanged: false }
+    if (assistantEventLooksCanonical(event)) {
+      state[key] = text
+    } else if (text.startsWith(before)) {
+      state[key] = text
+    } else {
+      state[key] = before + text
+    }
     recomposeBuffers(state)
     return { bufferChanged: true }
   }
@@ -595,6 +605,18 @@ function assistantTextFromAssistantEvent(event: any): string {
     .map(part => (part?.type === 'text' ? (part.text ?? '') : ''))
     .filter(Boolean)
     .join('')
+}
+
+function assistantEventLooksCanonical(event: any): boolean {
+  const message = event?.message
+  return Boolean(
+    event?.uuid ||
+    event?.request_id ||
+    event?.session_id ||
+    message?.id ||
+    message?.model ||
+    message?.usage
+  )
 }
 
 function logCanonicalCorrection(

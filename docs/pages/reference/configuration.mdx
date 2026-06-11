@@ -14,6 +14,8 @@ Use these as the main extension points:
 | --- | --- |
 | `secretManager.existingSecretName` | Required runtime secrets such as database, Slack, sandbox signing, and 1Password credentials. |
 | `api.extraEnv` | API feature flags, worker tuning, retention, observability, and deployment-specific overrides. |
+| `apiRs.extraEnv` | Rust API feature flags, telemetry exporter settings, and deployment-specific overrides. |
+| `apiRs.metrics.*` | Prometheus/VictoriaMetrics scrape metadata for the Rust API `/metrics` endpoint. |
 | `slackbot.extraEnv` | Slackbot HTTP, Slack, feedback, and cross-org behavior. |
 | `sandbox.extraEnv` | Extra variables copied into every sandbox pod through `KUBERNETES_SANDBOX_EXTRA_ENV`. |
 | `overlay.*` | Overlay mount path and overlay image passed to the API and sandboxes. |
@@ -69,6 +71,19 @@ Optional required-by-mode variables:
 | `CENTAUR_ENABLE_GCLOUD_BOOTSTRAP`, `GCP_GCLOUD_CREDENTIAL`, `GCLOUD_PROJECT` | `api.extraEnv` or Secret. | Optional gcloud ADC bootstrap in the API container. |
 | `CLAUDE_MODEL`, `CODEX_MODEL` | `api.extraEnv` or request model override. | Harness model selection defaults. |
 
+## API-RS
+
+| Env var or value | Set from | Controls |
+| --- | --- | --- |
+| `RUST_LOG` | Chart sets `info`; override with `apiRs.extraEnv`. | Rust tracing filter for the API-RS binary and crates. |
+| `OTEL_SERVICE_NAME` | `apiRs.extraEnv`; defaults to `centaur-api-rs`. | OpenTelemetry service name used by trace backends. |
+| `CENTAUR_ENVIRONMENT`, `DEPLOY_ENV`, `ENVIRONMENT` | `apiRs.extraEnv` or deployment env. | Deployment environment resource attribute for telemetry. |
+| `OTEL_TRACES_EXPORTER` | `apiRs.extraEnv`. | Set to `otlp` to force OTLP trace export, or `none`/`off` to disable it. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `apiRs.extraEnv`. | Enables OTLP trace export to Tempo, Jaeger, or another OTLP collector. |
+| `apiRs.metrics.scrapeAnnotations` | Helm value, default `true`. | Adds Prometheus scrape annotations to the API-RS Pod template and Service. |
+| `apiRs.metrics.path` | Helm value, default `/metrics`. | Metrics scrape path for annotation-based discovery. |
+| `apiRs.metrics.annotations` | Helm value. | Additional scrape annotations for Prometheus-compatible collectors. |
+
 Execution tuning:
 
 | Env var | Set from | Controls |
@@ -83,6 +98,7 @@ Execution tuning:
 | `THREAD_FAILURE_LOOP_WINDOW_S`, `THREAD_FAILURE_LOOP_THRESHOLD` | `api.extraEnv`. | Repeated thread failure detection. |
 | `IDLE_TTL_S`, `SUSPENDED_RETENTION_S`, `MAX_ACTIVE_SANDBOX_SESSIONS` | `api.extraEnv`. | Sandbox cleanup limits. |
 | `STREAM_EOF_REATTACH_MAX`, `STREAM_EOF_REATTACH_BACKOFF_S` | `api.extraEnv`. | Stream reattach retry behavior. |
+| `SANDBOX_CROSS_THREAD_READS` | `api.extraEnv`. | Lets a sandbox token read any thread it has the key for (messages, status, attachments). Defaults to enabled. Set to `0` to confine reads to the token's own thread. Writes are always confined regardless. |
 
 ## Slackbot
 
@@ -101,6 +117,7 @@ Execution tuning:
 | `SLACK_FEEDBACK_COMMANDS`, `SLACK_FEEDBACK_ALLOWED_CHANNELS` | `slackbot.extraEnv`. | Feedback slash commands and optional channel allowlist. |
 | `SLACK_FEEDBACK_LINEAR_TEAM_ID`, `SLACK_FEEDBACK_LINEAR_PROJECT_ID` | `slackbot.extraEnv`. | Linear destination for feedback issues. |
 | `SLACKBOT_EXTERNAL_ORG_ALLOWLIST` | `slackbot.extraEnv`. | Slack team ids allowed for external org handoff. |
+| `SLACK_TEAM_ID` | `slackbot.extraEnv`. | Workspace team ID (e.g. `T01ABCD2EFG`) used to rewrite `https://*.slack.com/archives/...` URLs in final-delivery messages into native `slack://channel?team=...` deep links that open in the Slack app. Leave unset to keep archive URLs unchanged. |
 | `COMMIT_SHA` | Build/deploy env. | Commit shown in Slackbot metadata. |
 
 ## Sandbox
@@ -188,6 +205,7 @@ Google Workspace ETL workflows:
 | Env var | Set from | Controls |
 | --- | --- | --- |
 | `VICTORIAMETRICS_URL`, `VICTORIAMETRICS_PUSH_ENABLED` | `api.extraEnv`, `api.victoriaMetricsPushEnabled`. | Push-based API metrics. |
+| `apiRs.metrics.*` | Helm values. | Pull-based scrape metadata for API-RS Prometheus metrics. |
 | `CENTAUR_RETENTION_ATTACHMENTS_TTL_DAYS`, `CENTAUR_RETENTION_TRANSCRIPTS_TTL_DAYS` | `api.extraEnv`. | Attachment/transcript retention TTLs. |
 | `CENTAUR_RETENTION_SWEEP_INTERVAL_SECONDS`, `CENTAUR_RETENTION_BATCH_SIZE`, `CENTAUR_RETENTION_DRY_RUN` | `api.extraEnv`. | Retention sweep cadence, batch size, and dry-run mode. |
 | `TOOL_CALL_TIMEOUT_S`, `TOOL_BINARY_INLINE_MAX_BYTES`, `TOOL_BINARY_PREVIEW_BYTES` | `api.extraEnv`. | Tool execution timeout and binary result handling. |

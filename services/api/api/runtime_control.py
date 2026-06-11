@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import datetime as dt
 import hashlib
 import json
 import os
-import pathlib
 import uuid
 from typing import Any
 
@@ -30,6 +28,7 @@ from api.agent import (
     stop_session,
 )
 from api import slackbot_client
+from api.attachments.processor import AttachmentDecodeError, AttachmentProcessor
 from api.harness_config import default_harness
 from api.otel import (
     add_span_event,
@@ -68,6 +67,7 @@ from api.sandbox.harness_protocol import extract_result
 from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
+_ATTACHMENT_PROCESSOR = AttachmentProcessor()
 
 _SLACKBOT_LIVE_DELIVERY_METADATA_KEY = "slackbot_live_delivery"
 _LEGACY_SLACKBOT_LIVE_DELIVERY_METADATA_KEY = "slackbot" + "_v" + "2_live_delivery"
@@ -313,7 +313,7 @@ def _resolve_claude_model_label(model: str | None) -> str:
     raw = (model or os.getenv("CLAUDE_MODEL") or _DEFAULT_CLAUDE_MODEL).strip().lower()
     if raw.startswith("claude-"):
         return raw
-    return _CLAUDE_MODEL_ALIASES.get(raw, raw or "claude-opus-4-7")
+    return _CLAUDE_MODEL_ALIASES.get(raw, raw or _DEFAULT_CLAUDE_MODEL)
 
 
 def _resolve_codex_model_label(model: str | None) -> str:
@@ -500,18 +500,6 @@ async def _merge_execution_metadata(
     )
 
 
-def _attachment_name_from_source_path(
-    source_path: str | None, attachment_id: str
-) -> str:
-    if not source_path:
-        return f"{attachment_id}.bin"
-    with contextlib.suppress(Exception):
-        parsed = pathlib.PurePosixPath(source_path)
-        if parsed.name:
-            return parsed.name
-    return f"{attachment_id}.bin"
-
-
 def _metadata_platform(metadata: dict[str, Any]) -> str | None:
     platform = metadata.get("platform") if isinstance(metadata, dict) else None
     return platform if isinstance(platform, str) and platform else None
@@ -532,13 +520,23 @@ def _deployment_environment() -> str:
 
 
 def _slack_thread_metadata(thread_key: str) -> dict[str, str]:
-    parts = thread_key.split(":", 2)
-    if len(parts) != 3 or parts[0] != "slack":
+    # Slack thread keys are slack:<team>:<channel>:<thread_ts>; the older
+    # slack:<channel>:<thread_ts> form is still accepted for compatibility.
+    parts = thread_key.split(":")
+    if parts[0] != "slack":
         return {}
-    return {
-        "slack_channel_id": parts[1],
-        "slack_thread_ts": parts[2],
-    }
+    if len(parts) == 4:
+        return {
+            "slack_team_id": parts[1],
+            "slack_channel_id": parts[2],
+            "slack_thread_ts": parts[3],
+        }
+    if len(parts) == 3:
+        return {
+            "slack_channel_id": parts[1],
+            "slack_thread_ts": parts[2],
+        }
+    return {}
 
 
 def _execution_laminar_metadata(
@@ -901,93 +899,19 @@ async def extract_inline_attachments(
     chat_message_id: str,
     parts: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    transformed: list[dict[str, Any]] = []
-    attachment_ids: list[str] = []
-
-    for part in parts:
-        source = part.get("source") if isinstance(part, dict) else None
-        if (
-            isinstance(source, dict)
-            and source.get("type") == "base64"
-            and isinstance(source.get("data"), str)
-        ):
-            media_type = str(source.get("media_type") or "application/octet-stream")
-            try:
-                raw = base64.b64decode(source["data"])
-            except Exception as exc:
-                raise ControlPlaneError(
-                    "INVALID_BASE64_ATTACHMENT",
-                    f"invalid base64 attachment: {exc}",
-                    422,
-                ) from exc
-            attachment_id = f"att-{uuid.uuid4().hex[:16]}"
-            source_path = (
-                part.get("source_path")
-                if isinstance(part.get("source_path"), str)
-                else None
-            )
-            name = (
-                str(part.get("name"))
-                if isinstance(part.get("name"), str) and part.get("name")
-                else _attachment_name_from_source_path(source_path, attachment_id)
-            )
-            await pool.execute(
-                "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
-                "VALUES ($1, $2, $3, $4, $5, $6)",
-                attachment_id,
-                thread_key,
-                chat_message_id,
-                name,
-                media_type,
-                raw,
-            )
-            transformed.append(
-                {
-                    "type": "attachment_ref",
-                    "attachment_id": attachment_id,
-                    "media_type": media_type,
-                    "name": name,
-                    **({"source_path": source_path} if source_path else {}),
-                }
-            )
-            attachment_ids.append(attachment_id)
-            continue
-
-        transformed.append(part)
-
-    return transformed, attachment_ids
+    try:
+        return await _ATTACHMENT_PROCESSOR.extract_inline_parts(
+            pool,
+            thread_key=thread_key,
+            chat_message_id=chat_message_id,
+            parts=parts,
+        )
+    except AttachmentDecodeError as exc:
+        raise ControlPlaneError("INVALID_BASE64_ATTACHMENT", str(exc), 422) from exc
 
 
 def event_to_chat_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    chat_parts: list[dict[str, Any]] = []
-    for part in parts:
-        part_type = part.get("type")
-        if part_type == "text":
-            chat_parts.append({"type": "text", "text": str(part.get("text") or "")})
-        elif part_type == "attachment_ref":
-            attachment_id = str(part.get("attachment_id") or "")
-            media_type = str(part.get("media_type") or "application/octet-stream")
-            source_path = (
-                part.get("source_path")
-                if isinstance(part.get("source_path"), str)
-                else None
-            )
-            name = (
-                str(part.get("name"))
-                if isinstance(part.get("name"), str) and part.get("name")
-                else _attachment_name_from_source_path(source_path, attachment_id)
-            )
-            chat_parts.append(
-                {
-                    "type": "attachment_ref",
-                    "id": attachment_id,
-                    "name": name,
-                    "mime_type": media_type,
-                }
-            )
-        else:
-            chat_parts.append(part)
-    return chat_parts
+    return _ATTACHMENT_PROCESSOR.event_parts_to_chat_parts(parts)
 
 
 async def append_message(
@@ -2340,7 +2264,8 @@ async def _mark_execution_terminal(
     delivery_platform = _delivery_platform(
         decode_jsonb(row["delivery"], {}) if row else {}
     )
-    if delivery_platform == "dev" or suppress_legacy_delivery:
+    suppress_no_input_delivery = terminal_reason == "no_input"
+    if delivery_platform == "dev" or suppress_legacy_delivery or suppress_no_input_delivery:
         slackbot_agent_session_id = str(metadata.get("slackbot_agent_session_id") or "")
         result_size = payload_size_bytes(result_text)
         if suppress_legacy_delivery and result_size > 0 and slackbot_streamed_answer_chars <= 0:
@@ -2358,17 +2283,21 @@ async def _mark_execution_terminal(
                     metadata.get("slackbot_live_delivery_failed")
                 ),
             )
+        if suppress_no_input_delivery:
+            reason = "no_input"
+        elif suppress_legacy_delivery:
+            reason = "slackbot_live_delivery"
+        else:
+            reason = "dev_delivery"
         log.info(
             "final_delivery_skipped"
-            if suppress_legacy_delivery
+            if suppress_legacy_delivery or suppress_no_input_delivery
             else "final_delivery_skipped_dev",
             execution_id=execution_id,
             thread_key=thread_key,
             status=status,
             terminal_reason=terminal_reason,
-            reason="slackbot_live_delivery"
-            if suppress_legacy_delivery
-            else "dev_delivery",
+            reason=reason,
             agent_thread_id=agent_thread_id or None,
             slackbot_agent_session_id=slackbot_agent_session_id or None,
             slackbot_streamed_answer_chars=slackbot_streamed_answer_chars,
@@ -3081,6 +3010,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
         await _write_agents_override(session.sandbox_id, str(assignment_override))
 
     if durable_turn_id:
+        injected_for_execution = True
         await _heartbeat_execution_lease(pool, execution_id)
         completed_result = await _completed_session_result_for_reclaimed_turn(
             pool,
@@ -3157,6 +3087,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                 },
             )
         durable_turn_id = str(inject_result.get("durable_turn_id") or "")
+        injected_for_execution = bool(inject_result.get("injected"))
         await pool.execute(
             "UPDATE agent_execution_requests SET durable_turn_id = $1, updated_at = NOW() "
             "WHERE execution_id = $2",
@@ -3190,9 +3121,6 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     )
     user_id: str | None = str(user_id_row) if user_id_row else None
 
-    backend = get_backend()
-    await backend.attach(session, logs=reclaiming_existing_turn)
-    rt = _get_runtime(session.sandbox_id)
     observations = ExecutionObservationAccumulator()
     started_at = claimed_at or row.get("created_at")
     first_token_at: dt.datetime | None = None
@@ -3205,6 +3133,8 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     # to the outbox path; the streak resets on the next success.
     slackbot_live_failure_streak = 0
     slackbot_live_failure_limit = 5
+    latest_terminal_result_text = ""
+    slackbot_streamed_answer_chars = 0
 
     async def _finalize_execution(
         *,
@@ -3310,6 +3240,42 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
             slackbot_streamed_answer_chars_override=slackbot_streamed_answer_chars,
         )
 
+    if not injected_for_execution:
+        log.info(
+            "execution_no_input_skipped",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            assignment_generation=assignment_generation,
+            runtime_id=session.sandbox_id,
+            queue_delay_s=round(queue_delay_s, 3),
+        )
+        add_span_event(
+            "centaur.agent.execution_no_input",
+            {
+                "execution_id": execution_id,
+                "thread_key": thread_key,
+                "assignment_generation": assignment_generation,
+                "runtime_id": session.sandbox_id,
+            },
+        )
+        set_span_attributes(
+            trace.get_current_span(),
+            {
+                "centaur.execution.no_input": True,
+            },
+        )
+        await _finalize_execution(
+            status="completed",
+            terminal_reason="no_input",
+            result_text="",
+            error_text=None,
+        )
+        return
+
+    backend = get_backend()
+    await backend.attach(session)
+    rt = _get_runtime(session.sandbox_id)
+
     execution_started_payload = {
         "type": "obs.execution_started",
         "execution_id": execution_id,
@@ -3366,8 +3332,6 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     await _touch_execution_progress(pool, execution_id)
 
     turn_done_event: dict[str, Any] | None = None
-    latest_terminal_result_text = ""
-    slackbot_streamed_answer_chars = 0
     pending_event: asyncio.Task | None = None
     stream = _stream_stdout(
         session,

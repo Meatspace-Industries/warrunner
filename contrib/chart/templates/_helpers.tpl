@@ -124,11 +124,21 @@ namespace as this release, so a short DNS name is enough.
 {{- end -}}
 
 {{- /*
-iron-token-broker — owns OAuth refresh-token state for credentials whose IdP
-rotates refresh tokens with strict reuse detection (OpenAI Codex, Anthropic
-Claude Code OAuth). One process, ClusterIP service, config rendered from
-registered refresh_token OAuthTokenSecrets by the API server at startup.
+iron-control — Rails control plane for authenticated API access and encrypted
+secret storage. Flag-gated (ironControl.enabled), in-cluster ClusterIP Service.
 */ -}}
+{{- define "centaur.ironControlName" -}}
+{{- include "centaur.componentName" (dict "root" . "component" "iron-control") -}}
+{{- end -}}
+
+{{- define "centaur.ironControlHost" -}}
+{{- include "centaur.ironControlName" . -}}
+{{- end -}}
+
+{{- define "centaur.ironControlUrl" -}}
+{{- printf "http://%s:%v" (include "centaur.ironControlHost" .) .Values.ironControl.service.httpPort -}}
+{{- end -}}
+
 {{- define "centaur.tokenBrokerName" -}}
 {{- include "centaur.componentName" (dict "root" . "component" "token-broker") -}}
 {{- end -}}

@@ -12,6 +12,9 @@ tool_manager (injection map). The API server owns iron-proxy's full config:
   minting OAuth2 access tokens for the declared grant.
 - ``hmac_sign`` transforms — one per unique ``HmacSignSecret`` signing scheme,
   HMAC-signing each request and injecting the configured headers.
+- ``aws_auth`` transforms — one per unique ``AwsAuthSecret`` credential set,
+  re-signing AWS SigV4 requests (the tool signs with placeholder credentials)
+  with real keys resolved from the secret source.
 - top-level ``postgres:`` — one listener per ``PgDsnSecret`` on sequential ports
   starting at 5432, ordered by name.
 """
@@ -26,6 +29,7 @@ from typing import Any
 import yaml
 
 from api.tool_manager import (
+    AwsAuthSecret,
     BrokeredTokenSecret,
     GcpAuthSecret,
     HmacSignSecret,
@@ -52,7 +56,7 @@ GCP_AUTH_HOSTS: tuple[str, ...] = ("*.googleapis.com",)
 PG_LISTEN_PORT_BASE = 5432
 
 _MANAGED_TRANSFORMS: frozenset[str] = frozenset(
-    {"secrets", "gcp_auth", "oauth_token", "hmac_sign"}
+    {"secrets", "gcp_auth", "oauth_token", "hmac_sign", "aws_auth"}
 )
 
 # Iron-proxy ``source`` schema for resolving secret values. ``env`` reads the
@@ -97,6 +101,30 @@ def _build_source(secret_ref: str) -> dict[str, str]:
             "ttl": _secret_ttl(),
         }
     return {"type": "env", "var": secret_ref}
+
+
+# Per-sandbox listener that lets a co-located tool-server sidecar reach the
+# core Centaur DB through the proxy (sandboxes are denied direct Postgres
+# egress). Unlike tool ``pg_dsn`` listeners, its upstream is always resolved
+# from an env var: the proxy already has the core DSN via ``envFrom`` the infra
+# secret, so this is robust regardless of the configured secret source.
+CENTAUR_CORE_PG_LISTENER = "centaur_core"
+
+
+def core_pg_listen_port(pg_listen_ports: dict[str, int]) -> int:
+    """Port for the core-DB listener: just past the tool ``pg_dsn`` listeners."""
+    return PG_LISTEN_PORT_BASE + len(pg_listen_ports)
+
+
+def _build_core_pg_listener(
+    *, port: int, dsn_env_var: str, password_env: str
+) -> dict[str, Any]:
+    return {
+        "name": CENTAUR_CORE_PG_LISTENER,
+        "listen": f"0.0.0.0:{port}",
+        "upstream": {"dsn": {"type": "env", "var": dsn_env_var}},
+        "client": {"user": "app_user", "password_env": password_env},
+    }
 
 
 def assign_pg_listen_ports(secrets: list[SecretDef]) -> dict[str, int]:
@@ -411,6 +439,51 @@ def _build_hmac_sign_transforms(
     return transforms
 
 
+def _build_aws_auth_transforms(
+    secrets: list[SecretDef],
+) -> list[dict[str, Any]]:
+    """``aws_auth`` transforms: one per unique credential set + scope.
+
+    Entries that share the same credential refs, session token, and
+    allowed regions/services are merged — their host rules are unioned so the
+    same signing config covers every upstream that opted in. iron-proxy re-signs
+    requests the tool signed with placeholder credentials, drawing the real keys
+    from the resolved secret sources.
+    """
+    by_scheme: dict[
+        tuple[str, str, str | None, tuple[str, ...], tuple[str, ...]],
+        set[str],
+    ] = {}
+    for secret in secrets:
+        if not isinstance(secret, AwsAuthSecret):
+            continue
+        key = (
+            secret.access_key_id_ref,
+            secret.secret_access_key_ref,
+            secret.session_token_ref,
+            secret.allowed_regions,
+            secret.allowed_services,
+        )
+        by_scheme.setdefault(key, set()).update(secret.hosts)
+
+    transforms: list[dict[str, Any]] = []
+    for key in sorted(by_scheme, key=lambda k: (k[0], k[1])):
+        access_key_id_ref, secret_access_key_ref, session_token_ref, regions, services = key
+        config: dict[str, Any] = {
+            "access_key_id": _build_source(access_key_id_ref),
+            "secret_access_key": _build_source(secret_access_key_ref),
+        }
+        if session_token_ref:
+            config["session_token"] = _build_source(session_token_ref)
+        if regions:
+            config["allowed_regions"] = list(regions)
+        if services:
+            config["allowed_services"] = list(services)
+        config["rules"] = [{"host": h} for h in sorted(by_scheme[key])]
+        transforms.append({"name": "aws_auth", "config": config})
+    return transforms
+
+
 def _build_postgres_listeners(
     secrets: list[SecretDef],
     pg_listen_ports: dict[str, int],
@@ -449,6 +522,7 @@ def render_proxy_yaml(
     base_config: str | None = None,
     *,
     pg_listen_ports: dict[str, int] | None = None,
+    core_pg: dict[str, Any] | None = None,
 ) -> str:
     """Splice managed transforms + postgres listeners into ``base_config`` YAML.
 
@@ -475,6 +549,7 @@ def render_proxy_yaml(
     if oauth_token is not None:
         new_transforms.append(oauth_token)
     new_transforms.extend(_build_hmac_sign_transforms(secrets))
+    new_transforms.extend(_build_aws_auth_transforms(secrets))
     if new_transforms:
         for index, transform in enumerate(transforms):
             if (transform or {}).get("name") == "header_allowlist":
@@ -485,6 +560,8 @@ def render_proxy_yaml(
     cfg["transforms"] = transforms
 
     listeners = _build_postgres_listeners(secrets, pg_listen_ports)
+    if core_pg is not None:
+        listeners.append(_build_core_pg_listener(**core_pg))
     if listeners:
         cfg["postgres"] = listeners
     else:

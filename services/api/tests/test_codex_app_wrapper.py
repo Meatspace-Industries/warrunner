@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 from pathlib import Path
 import tomllib
@@ -171,6 +172,65 @@ def test_start_or_resume_thread_uses_codex_resume_env(monkeypatch) -> None:
             {"threadId": "codex-thread-123", "cwd": wrapper.os.getcwd()},
         )
     ]
+
+
+def test_input_items_materializes_data_url_image(monkeypatch, tmp_path) -> None:
+    wrapper = _load_wrapper()
+    monkeypatch.setattr(wrapper, "UPLOADS_DIR", tmp_path)
+
+    items = wrapper.input_items(
+        {
+            "message": {
+                "content": [
+                    {"type": "text", "text": "please invert this"},
+                    {
+                        "type": "image",
+                        "name": "image.png",
+                        "url": "data:image/png;base64,"
+                        + base64.b64encode(b"png-bytes").decode(),
+                    },
+                ]
+            }
+        }
+    )
+
+    assert items == [
+        {
+            "type": "text",
+            "text": "please invert this\n"
+            + f"[Attached image saved to {tmp_path / 'image.png'}]",
+        },
+        {"type": "localImage", "path": str(tmp_path / "image.png"), "detail": "auto"},
+    ]
+    assert (tmp_path / "image.png").read_bytes() == b"png-bytes"
+
+
+def test_input_items_materializes_slack_attachment_part(monkeypatch, tmp_path) -> None:
+    wrapper = _load_wrapper()
+    monkeypatch.setattr(wrapper, "UPLOADS_DIR", tmp_path)
+
+    items = wrapper.input_items(
+        {
+            "message": {
+                "content": [
+                    {
+                        "type": "attachment",
+                        "attachment_type": "image",
+                        "mimeType": "image/png",
+                        "name": "meme.png",
+                        "dataBase64": base64.b64encode(b"meme-bytes").decode(),
+                    }
+                ]
+            }
+        }
+    )
+
+    assert items == [
+        {"type": "text", "text": f"[Attached image saved to {tmp_path / 'meme.png'}]"},
+        {"type": "localImage", "path": str(tmp_path / "meme.png"), "detail": "auto"},
+    ]
+    assert (tmp_path / "meme.png").read_bytes() == b"meme-bytes"
+    assert "dataBase64" not in str(items)
 
 
 def test_configure_codex_otel_writes_startup_config(monkeypatch, tmp_path) -> None:
@@ -554,3 +614,30 @@ def test_start_or_resume_thread_resumes_existing_thread(monkeypatch) -> None:
     assert wrapper.start_or_resume_thread() == "existing-thread-id"
     assert requests == ["thread/resume"]
     assert {"type": "thread.started", "thread_id": "existing-thread-id"} in emitted
+
+
+def test_export_slack_thread_env_handles_both_key_shapes(monkeypatch) -> None:
+    wrapper = _load_wrapper()
+    monkeypatch.delenv("SLACK_CHANNEL", raising=False)
+    monkeypatch.delenv("SLACK_THREAD_TS", raising=False)
+
+    wrapper.export_slack_thread_env("slack:C0A87C21805:1781122990.363779")
+    assert wrapper.os.environ["SLACK_CHANNEL"] == "C0A87C21805"
+    assert wrapper.os.environ["SLACK_THREAD_TS"] == "1781122990.363779"
+
+    wrapper.export_slack_thread_env("slack:T092R71U6QY:C0B2ZRAMV9C:1781123220.343859")
+    assert wrapper.os.environ["SLACK_CHANNEL"] == "C0B2ZRAMV9C"
+    assert wrapper.os.environ["SLACK_THREAD_TS"] == "1781123220.343859"
+
+
+def test_export_slack_thread_env_ignores_non_slack_keys(monkeypatch) -> None:
+    wrapper = _load_wrapper()
+    monkeypatch.delenv("SLACK_CHANNEL", raising=False)
+    monkeypatch.delenv("SLACK_THREAD_TS", raising=False)
+
+    wrapper.export_slack_thread_env("cli:test-thread")
+    wrapper.export_slack_thread_env("slack:onlyonepart")
+    wrapper.export_slack_thread_env("slack:a:b:c:d:e")
+
+    assert "SLACK_CHANNEL" not in wrapper.os.environ
+    assert "SLACK_THREAD_TS" not in wrapper.os.environ

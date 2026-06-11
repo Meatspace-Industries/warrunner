@@ -291,7 +291,7 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert env_map["AMP_API_KEY"] == "AMP_API_KEY"
     assert env_map["OPENAI_API_KEY"] == "OPENAI_API_KEY"
     assert env_map["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
-    assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,api.internal"
+    assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,victoriametrics,victorialogs,api.internal"
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
 
 
@@ -321,11 +321,11 @@ def test_container_env_applies_kubernetes_sandbox_extra_env(
             [
                 {
                     "name": "NO_PROXY",
-                    "value": "localhost,127.0.0.1,api.internal,metrics.internal",
+                    "value": "localhost,127.0.0.1,firewall.internal,victoriametrics,victorialogs,api.internal,host.orb.internal,metrics.internal",
                 },
                 {
                     "name": "no_proxy",
-                    "value": "localhost,127.0.0.1,api.internal,metrics.internal",
+                    "value": "localhost,127.0.0.1,firewall.internal,victoriametrics,victorialogs,api.internal,host.orb.internal,metrics.internal",
                 },
                 {
                     "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -338,8 +338,8 @@ def test_container_env_applies_kubernetes_sandbox_extra_env(
     env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
     env_map = dict(item.split("=", 1) for item in env)
 
-    assert env_map["NO_PROXY"] == "localhost,127.0.0.1,api.internal,metrics.internal"
-    assert env_map["no_proxy"] == "localhost,127.0.0.1,api.internal,metrics.internal"
+    assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,victoriametrics,victorialogs,api.internal,host.orb.internal,metrics.internal"
+    assert env_map["no_proxy"] == "localhost,127.0.0.1,firewall.internal,victoriametrics,victorialogs,api.internal,host.orb.internal,metrics.internal"
     assert env_map["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://host.orb.internal:8000"
     assert len([item for item in env if item.startswith("NO_PROXY=")]) == 1
     assert len([item for item in env if item.startswith("no_proxy=")]) == 1
@@ -874,7 +874,7 @@ async def test_create_builds_per_sandbox_proxy_resources(
     assert sandbox_env["HTTPS_PROXY"] == f"http://{proxy_service_name}:8080"
     assert (
         sandbox_env["NO_PROXY"]
-        == f"localhost,127.0.0.1,{proxy_service_name},api.internal"
+        == f"localhost,127.0.0.1,{proxy_service_name},victoriametrics,victorialogs,api.internal"
     )
     assert proxy_pod["metadata"]["labels"] == {
         "centaur.ai/iron-proxy": "true",

@@ -167,7 +167,13 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
+    # The entrypoint installs the harness config and force-disables Codex
+    # fanout (multi_agent / multi_agent_v2) in the [features] section.
+    assert 'model = "gpt-5.5"' in result.stdout
+    assert 'service_tier = "fast"' in result.stdout
+    assert "multi_agent = false" in result.stdout
+    assert "multi_agent_v2 = false" in result.stdout
+    assert "enable_fanout = true" in result.stdout
 
 
 def test_sandbox_entrypoint_configures_proxy_rewritable_github_auth(
@@ -440,3 +446,5 @@ def test_sandbox_entrypoint_rejects_non_chatgpt_codex_auth_json(
     assert error in result.stderr
     assert "codex login should not run" not in result.stderr
     assert not (home / ".codex" / "auth.json").exists()
+
+

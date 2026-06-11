@@ -113,6 +113,7 @@ spec:
   {{- end }}
 ---
 {{- end }}
+{{- if .Values.api.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -141,25 +142,6 @@ spec:
       imagePullSecrets:
 {{ toYaml . | nindent 8 }}
       {{- end }}
-{{- if .Values.overlay.image.repository }}
-      initContainers:
-        - name: overlay-bootstrap
-          image: {{ printf "%s:%s" .Values.overlay.image.repository .Values.overlay.image.tag | quote }}
-          imagePullPolicy: {{ .Values.overlay.image.pullPolicy }}
-          command:
-            - /bin/sh
-            - -ec
-            - |
-              src={{ .Values.overlay.image.sourcePath | quote }}
-              target={{ .Values.overlay.mountPath | quote }}
-              mkdir -p "$target"
-              cp -R "$src"/. "$target"/
-          volumeMounts:
-            - name: overlay-root
-              mountPath: {{ dir .Values.overlay.mountPath | quote }}
-          securityContext:
-{{ toYaml .Values.containerSecurityContext | nindent 12 }}
-{{- end }}
       containers:
         - name: api
           image: {{ printf "%s:%s" .Values.api.image.repository .Values.api.image.tag | quote }}
@@ -200,28 +182,12 @@ spec:
             - name: CENTAUR_DEFAULT_HARNESS
               value: {{ .Values.api.defaultHarness | quote }}
             - name: TOOL_DIRS
-{{- if .Values.overlay.image.repository }}
-              value: {{ printf "/app/tools:%s/tools" .Values.overlay.mountPath | quote }}
-{{- else }}
               value: /app/tools
-{{- end }}
             - name: WORKFLOW_DIRS
-{{- if .Values.overlay.image.repository }}
-              value: {{ printf "/app/workflows:%s/workflows" .Values.overlay.mountPath | quote }}
-{{- else }}
               value: /app/workflows
-{{- end }}
-{{- if or .Values.overlay.systemPrompt .Values.overlay.image.repository }}
+{{- if .Values.overlay.systemPrompt }}
             - name: CENTAUR_OVERLAY_DIR
               value: {{ .Values.overlay.mountPath | quote }}
-{{- end }}
-{{- if .Values.overlay.image.repository }}
-            - name: CENTAUR_OVERLAY_IMAGE
-              value: {{ printf "%s:%s" .Values.overlay.image.repository .Values.overlay.image.tag | quote }}
-            - name: CENTAUR_OVERLAY_IMAGE_PULL_POLICY
-              value: {{ .Values.overlay.image.pullPolicy | quote }}
-            - name: CENTAUR_OVERLAY_IMAGE_SOURCE_PATH
-              value: {{ .Values.overlay.image.sourcePath | quote }}
 {{- end }}
             - name: AGENT_API_URL
               value: {{ printf "http://%s:8000" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
@@ -483,11 +449,17 @@ spec:
             - name: REPOS_PATH
               value: {{ $reposPath | quote }}
 {{- end }}
-{{- with .Values.sandbox.extraEnv }}
 {{- $envList := list }}
-{{- range $k, $v := . }}
+{{- if .Values.sandbox.codexAuthMode }}
+{{- $envList = append $envList (dict "name" "CODEX_AUTH_MODE" "value" (.Values.sandbox.codexAuthMode | toString)) }}
+{{- end }}
+{{- if .Values.sandbox.claudeCodeAuthMode }}
+{{- $envList = append $envList (dict "name" "CLAUDE_CODE_AUTH_MODE" "value" (.Values.sandbox.claudeCodeAuthMode | toString)) }}
+{{- end }}
+{{- range $k, $v := .Values.sandbox.extraEnv }}
 {{- $envList = append $envList (dict "name" $k "value" ($v | toString)) }}
 {{- end }}
+{{- if $envList }}
             - name: KUBERNETES_SANDBOX_EXTRA_ENV
               value: {{ $envList | toJson | quote }}
 {{- end }}
@@ -540,11 +512,7 @@ spec:
             - name: firewall-ca
               mountPath: /firewall-certs
               readOnly: true
-{{- if .Values.overlay.image.repository }}
-            - name: overlay-root
-              mountPath: {{ dir .Values.overlay.mountPath | quote }}
-              readOnly: true
-{{- else if .Values.overlay.systemPrompt }}
+{{- if .Values.overlay.systemPrompt }}
             - name: overlay
               mountPath: {{ .Values.overlay.mountPath | quote }}
               readOnly: true
@@ -557,10 +525,7 @@ spec:
         - name: firewall-ca
           secret:
             secretName: {{ include "centaur.trustedCaSecretName" . }}
-{{- if .Values.overlay.image.repository }}
-        - name: overlay-root
-          emptyDir: {}
-{{- else if .Values.overlay.systemPrompt }}
+{{- if .Values.overlay.systemPrompt }}
         - name: overlay
           configMap:
             name: {{ include "centaur.componentName" (dict "root" . "component" "overlay") }}
@@ -569,6 +534,7 @@ spec:
                 path: services/sandbox/SYSTEM_PROMPT.md
 {{- end }}
 ---
+{{- end }}
 {{- if .Values.slackbot.enabled }}
 apiVersion: apps/v1
 kind: Deployment

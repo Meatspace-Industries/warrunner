@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import base64
-import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from api.deps import get_sandbox_claims, sandbox_thread_in_scope, verify_api_key
+from api.attachments.storage import insert_thread_attachment
+from api.deps import enforce_sandbox_thread_scope, verify_api_key
 
 log = structlog.get_logger()
 
@@ -25,20 +25,10 @@ def _ascii_filename(name: str) -> str:
     return name.encode("ascii", "ignore").decode("ascii").replace('"', "")
 
 
-def _enforce_sandbox_thread_scope(request: Request, thread_key: str) -> None:
-    """Reject if a sandbox token is trying to access a different thread."""
-    claims = get_sandbox_claims(request)
-    if claims is None:
-        return
-    allowed = claims.get("thread_key")
-    if not sandbox_thread_in_scope(allowed, thread_key):
-        raise HTTPException(status_code=403, detail="Sandbox token is scoped to a different thread")
-
-
 @router.get("")
 async def list_attachments(request: Request, thread_key: str):
     """List attachment metadata for a thread."""
-    _enforce_sandbox_thread_scope(request, thread_key)
+    enforce_sandbox_thread_scope(request, thread_key, write=False)
     pool = request.app.state.db_pool
     rows = await pool.fetch(
         "SELECT id, thread_key, message_id, name, mime_type, created_at "
@@ -82,26 +72,30 @@ async def upload_attachment(request: Request):
             detail="thread_key, name, mime_type, and data are required",
         )
 
-    _enforce_sandbox_thread_scope(request, thread_key)
+    enforce_sandbox_thread_scope(request, thread_key, write=True)
 
     try:
         raw_bytes = base64.b64decode(data_b64)
     except Exception:
         raise HTTPException(status_code=422, detail="data is not valid base64")
 
-    att_id = f"att-{uuid.uuid4().hex[:16]}"
     message_id = body.get("message_id")
     source_url = body.get("source_url")
 
     pool = request.app.state.db_pool
-    await pool.execute(
-        "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
-        "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
-        att_id, thread_key, message_id, name, mime_type, raw_bytes,
+    stored = await insert_thread_attachment(
+        pool,
+        thread_key=thread_key,
+        message_id=message_id,
+        name=name,
+        mime_type=mime_type,
+        data=raw_bytes,
+        source="direct_upload",
+        source_url=source_url,
     )
     log.info(
         "attachment_uploaded",
-        id=att_id,
+        id=stored.id,
         thread_key=thread_key,
         name=name,
         mime_type=mime_type,
@@ -109,10 +103,10 @@ async def upload_attachment(request: Request):
         source_url=source_url,
     )
     return {
-        "id": att_id,
+        "id": stored.id,
         "name": name,
         "mime_type": mime_type,
-        "download_url": f"/agent/attachments/{att_id}/download",
+        "download_url": stored.download_url,
     }
 
 
@@ -134,8 +128,10 @@ async def download_attachment(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    # Reject a sandbox token reading an attachment from another thread.
-    _enforce_sandbox_thread_scope(request, row["thread_key"])
+    # Reject a sandbox token reading an attachment from another thread, unless
+    # cross-thread reads are enabled (the default) — a thread link is the
+    # capability to view its attachments.
+    enforce_sandbox_thread_scope(request, row["thread_key"], write=False)
     # An explicit thread_key constrains the read to that thread, for callers
     # whose key is not a sandbox token (so the check above does not apply).
     if thread_key is not None and row["thread_key"] != thread_key:

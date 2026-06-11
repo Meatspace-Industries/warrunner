@@ -33,8 +33,7 @@
             "proxyPort": { "type": "integer" },
             "managementPort": { "type": "integer" },
             "healthPort": { "type": "integer" },
-            "pgPortRangeStart": { "type": "integer" },
-            "pgPortRangeEnd": { "type": "integer" }
+            "pgPort": { "type": "integer" }
           }
         },
         "secretSource": { "type": "string" },
@@ -45,7 +44,51 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
-        "port": { "type": "integer" }
+        "port": { "type": "integer" },
+        "repo": { "type": "string" },
+        "ref": { "type": "string" },
+        "subdir": { "type": "string" },
+        "extraSources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repo": { "type": "string" },
+              "ref": { "type": "string" },
+              "subdir": { "type": "string" }
+            },
+            "required": ["repo"]
+          }
+        }
+      }
+    },
+    "ironControl": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer" },
+        "railsEnv": { "type": "string" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string" }
+          }
+        },
+        "database": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "httpPort": { "type": "integer" }
+          }
+        },
+        "resources": { "type": "object" }
       }
     },
     "secrets": {
@@ -98,16 +141,7 @@
       "type": "object",
       "properties": {
         "mountPath": { "type": "string" },
-        "systemPrompt": { "type": "string" },
-        "image": {
-          "type": "object",
-          "properties": {
-            "repository": { "type": "string" },
-            "tag": { "type": "string" },
-            "pullPolicy": { "type": "string" },
-            "sourcePath": { "type": "string" }
-          }
-        }
+        "systemPrompt": { "type": "string" }
       }
     },
     "sandbox": {
@@ -126,6 +160,10 @@
         "repositories": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "repositoryRefs": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         },
         "syncIntervalSeconds": { "type": "integer" },
         "image": {
@@ -147,6 +185,15 @@
         "egressPorts": {
           "type": "array",
           "items": { "type": "integer" }
+        },
+        "readinessProbe": {
+          "type": "object",
+          "properties": {
+            "initialDelaySeconds": { "type": "integer" },
+            "periodSeconds": { "type": "integer" },
+            "timeoutSeconds": { "type": "integer" },
+            "failureThreshold": { "type": "integer" }
+          }
         },
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
@@ -178,6 +225,26 @@
           "properties": {
             "extensions": { "type": "boolean" }
           }
+        }
+      }
+    },
+    "apiRs": {
+      "type": "object",
+      "properties": {
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "scrapeAnnotations": { "type": "boolean" },
+            "path": { "type": "string" },
+            "annotations": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "extraEnv": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     },
