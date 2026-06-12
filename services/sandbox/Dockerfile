@@ -231,6 +231,10 @@ RUN --mount=type=bind,source=crates/harness-server,target=/harness-server-src \
     cargo install --locked --path /harness-server-src --root /home/agent/.local
 
 # No RUN instructions after these — all repo-local content at the very end.
+COPY --link --chown=1001:1001 --chmod=755 services/sandbox/amp-wrapper.py /home/agent/.local/bin/amp-wrapper
+COPY --link --chown=1001:1001 --chmod=755 services/sandbox/claude-app-wrapper.py /home/agent/.local/bin/claude-app-wrapper
+COPY --link --chown=1001:1001 --chmod=755 services/sandbox/codex-app-wrapper.py /home/agent/.local/bin/codex-app-wrapper
+COPY --link --chown=1001:1001 --chmod=755 services/sandbox/harness_adapter.py /home/agent/.local/bin/harness-adapter
 COPY --link --chown=1001:1001 .agents/skills/ /home/agent/.agents/skills/
 COPY --link --chown=1001:1001 harness/ /home/agent/harness/
 COPY --link --chown=1001:1001 workflows/ /opt/centaur/workflows/
